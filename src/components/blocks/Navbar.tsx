@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { locales } from "@/lib/i18n/config";
 
 interface NavLink {
   label: string;
@@ -17,23 +19,57 @@ interface NavbarProps {
   links?: NavLink[];
   ctaLabel?: string;
   ctaHref?: string;
+  locale?: string;
   className?: string;
 }
 
 const defaultLinks: NavLink[] = [
   { label: "Accueil", href: "#accueil" },
   { label: "Services", href: "#services" },
+  { label: "Dépannage", href: "#sos" },
   { label: "Processus", href: "#processus" },
   { label: "À propos", href: "#about" },
   { label: "FAQ", href: "#faq" },
   { label: "Contact", href: "#contact" },
 ];
 
+function LanguageSwitcher({ locale }: { locale: string }) {
+  const pathname = usePathname();
+
+  const switchLocale = (newLocale: string) => {
+    document.cookie = `NEXT_LOCALE=${newLocale};path=/;max-age=31536000`;
+    // Replace current locale in path with new locale
+    const segments = pathname.split("/");
+    segments[1] = newLocale;
+    window.location.href = segments.join("/");
+  };
+
+  return (
+    <div className="flex items-center gap-0.5 rounded-lg border border-border/50 bg-muted/30 p-0.5">
+      {locales.map((l) => (
+        <button
+          key={l}
+          onClick={() => switchLocale(l)}
+          className={cn(
+            "px-2 py-1 text-xs font-semibold uppercase rounded-md transition-all",
+            l === locale
+              ? "bg-primary text-primary-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
+          )}
+        >
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Navbar({
   logo,
   links = defaultLinks,
   ctaLabel = "Devis gratuit",
   ctaHref = "#contact",
+  locale = "fr",
   className,
 }: NavbarProps) {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -85,8 +121,9 @@ export function Navbar({
             ))}
           </div>
 
-          {/* Desktop CTA */}
+          {/* Desktop CTA + Language */}
           <div className="hidden lg:flex items-center gap-4">
+            <LanguageSwitcher locale={locale} />
             <Link
               href="tel:+32491348143"
               className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -103,7 +140,7 @@ export function Navbar({
           <button
             onClick={() => setIsMobileOpen(!isMobileOpen)}
             className="lg:hidden p-2 text-foreground"
-            aria-label={isMobileOpen ? "Fermer le menu" : "Ouvrir le menu"}
+            aria-label={isMobileOpen ? "Close menu" : "Open menu"}
           >
             {isMobileOpen ? (
               <X className="w-6 h-6" />
@@ -136,6 +173,9 @@ export function Navbar({
                 </Link>
               ))}
               <div className="pt-4 space-y-3">
+                <div className="px-4 py-2">
+                  <LanguageSwitcher locale={locale} />
+                </div>
                 <Link
                   href="tel:+32491348143"
                   className="flex items-center gap-2 px-4 py-2 text-sm text-muted-foreground"

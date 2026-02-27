@@ -1,0 +1,276 @@
+{
+  "nav": {
+    "home": "Accueil",
+    "services": "Services",
+    "troubleshooting": "Dépannage",
+    "process": "Processus",
+    "about": "À propos",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "cta": "Devis gratuit"
+  },
+  "hero": {
+    "badge": "Agence Digitale en Belgique",
+    "title1": "Votre Stratégie Digitale,",
+    "title2": "Notre Expertise",
+    "description": "Nous créons des expériences digitales qui transforment et propulsent votre business. Sites web, design, réseaux sociaux et publicité — tout pour dominer votre marché en ligne.",
+    "ctaPrimary": "Démarrer votre projet",
+    "ctaSecondary": "Découvrir nos services",
+    "heroImageAlt": "Stratégie digitale - The Webmaster"
+  },
+  "services": {
+    "label": "Nos Services",
+    "title": "Des solutions complètes pour votre",
+    "titleHighlight": "présence digitale",
+    "description": "De la conception à la promotion, nous accompagnons votre entreprise à chaque étape de sa transformation numérique.",
+    "items": [
+      {
+        "title": "Création de Sites Web",
+        "description": "Sites vitrines, e-commerce et applications web sur mesure. Design moderne, SEO optimisé et performances maximales."
+      },
+      {
+        "title": "Design Graphique",
+        "description": "Identité visuelle, logos, supports print et digitaux. Une image de marque cohérente et mémorable pour votre entreprise."
+      },
+      {
+        "title": "Réseaux Sociaux",
+        "description": "Stratégie social media, création de contenu et community management. Développez votre audience et engagez votre communauté."
+      },
+      {
+        "title": "Publicité Digitale",
+        "description": "Campagnes Google Ads, Meta Ads et LinkedIn. Maximisez votre ROI avec des campagnes ciblées et mesurables."
+      },
+      {
+        "title": "SEO & Référencement",
+        "description": "Audit SEO, optimisation on-page et off-page, stratégie de contenu. Améliorez votre visibilité sur Google et attirez plus de clients."
+      },
+      {
+        "title": "Solutions Digitales",
+        "description": "Automatisation, outils IA, intégrations et maintenance. Des solutions technologiques pour optimiser votre activité."
+      },
+      {
+        "title": "Email Marketing",
+        "description": "Newsletters, campagnes email, automation marketing. Fidélisez vos clients et générez des leads qualifiés."
+      },
+      {
+        "title": "Hébergement & Maintenance",
+        "description": "Hébergement web performant, maintenance, mises à jour et support technique. Votre site toujours en ligne et sécurisé."
+      },
+      {
+        "title": "Formation & Consulting",
+        "description": "Formation digitale, accompagnement stratégique et consulting. Montez en compétences et prenez les bonnes décisions."
+      }
+    ]
+  },
+  "sos": {
+    "label": "SOS WordPress",
+    "title": "Votre site WordPress a des",
+    "titleHighlight": "problèmes",
+    "titleEnd": "?",
+    "description": "Pas de panique ! Notre équipe d'experts est là pour diagnostiquer et résoudre rapidement tous vos soucis techniques.",
+    "problems": [
+      "Problèmes d'affichage ou site lent",
+      "Fonctionnalités qui ne marchent plus",
+      "Codes d'erreur ou écran blanc",
+      "Temps de chargement anormaux"
+    ],
+    "whyUs": [
+      {
+        "title": "Expertise reconnue",
+        "description": "Des spécialistes WordPress avec des années d'expérience."
+      },
+      {
+        "title": "Intervention rapide",
+        "description": "Prise en charge immédiate pour résoudre vos urgences."
+      },
+      {
+        "title": "Solutions sur mesure",
+        "description": "Chaque intervention est adaptée à votre situation."
+      },
+      {
+        "title": "Tarifs accessibles",
+        "description": "Des prix transparents et compétitifs sans surprise."
+      }
+    ],
+    "pricing": [
+      {
+        "title": "Urgence",
+        "price": 150,
+        "suffix": "+",
+        "description": "Intervention rapide pour résoudre un problème critique sur votre site.",
+        "features": [
+          "Prise en charge sous 2h",
+          "Correction du problème",
+          "Rapport d'intervention"
+        ],
+        "cta": "J'ai besoin d'aide",
+        "highlighted": true
+      },
+      {
+        "title": "Diagnostic",
+        "price": 65,
+        "suffix": "+",
+        "description": "Analyse complète de votre site pour identifier tous les problèmes.",
+        "features": [
+          "Audit technique complet",
+          "Rapport détaillé",
+          "Recommandations personnalisées"
+        ],
+        "cta": "Faire analyser mon site",
+        "highlighted": false
+      },
+      {
+        "title": "Maintenance",
+        "price": 29,
+        "suffix": "/mois",
+        "description": "Gardez votre site en parfait état avec un suivi régulier.",
+        "features": [
+          "Mises à jour régulières",
+          "Sauvegardes automatiques",
+          "Support prioritaire"
+        ],
+        "cta": "Souscrire un abonnement",
+        "highlighted": false
+      }
+    ]
+  },
+  "process": {
+    "label": "Notre Processus",
+    "title": "Un accompagnement en",
+    "rotatingWords": ["3 étapes", "toute confiance", "toute transparence"],
+    "description": "Une méthodologie éprouvée pour garantir le succès de votre projet digital.",
+    "steps": [
+      {
+        "step": "01",
+        "title": "Consultation",
+        "description": "Nous analysons vos besoins, votre marché et vos objectifs pour définir une stratégie digitale sur mesure."
+      },
+      {
+        "step": "02",
+        "title": "Conception & Création",
+        "description": "Notre équipe conçoit et développe votre projet avec les dernières technologies et les meilleures pratiques du secteur."
+      },
+      {
+        "step": "03",
+        "title": "Lancement & Suivi",
+        "description": "Mise en ligne, formation et suivi des performances. Nous restons à vos côtés pour optimiser vos résultats."
+      }
+    ]
+  },
+  "about": {
+    "label": "Pourquoi nous choisir",
+    "title": "Une approche stratégique pour des",
+    "titleHighlight": "résultats concrets",
+    "description": "Comme aux échecs, chaque mouvement compte dans le digital. Nous élaborons des stratégies réfléchies et exécutons avec précision pour positionner votre entreprise en leader sur son marché.",
+    "advantages": [
+      "Expertise technique de pointe (Next.js, React, WordPress)",
+      "Design sur mesure adapté à votre image de marque",
+      "Optimisation SEO intégrée dès la conception",
+      "Accompagnement personnalisé de A à Z",
+      "Résultats mesurables et ROI transparent",
+      "Support réactif et maintenance continue"
+    ],
+    "cta": "En savoir plus",
+    "imageAlt": "Expertise digitale - The Webmaster"
+  },
+  "usps": [
+    {
+      "title": "Rapidité d'exécution",
+      "description": "Des délais de livraison courts grâce à nos processus optimisés et notre expertise technique."
+    },
+    {
+      "title": "Qualité garantie",
+      "description": "Code propre, performances optimales et sécurité renforcée sur chaque projet livré."
+    },
+    {
+      "title": "Accompagnement sur mesure",
+      "description": "Un interlocuteur dédié et un suivi personnalisé à chaque étape de votre projet."
+    },
+    {
+      "title": "Résultats mesurables",
+      "description": "Des KPIs clairs et un ROI transparent pour chaque action mise en place."
+    }
+  ],
+  "faq": {
+    "label": "FAQ",
+    "title": "Questions",
+    "titleHighlight": "fréquentes",
+    "description": "Retrouvez les réponses aux questions les plus courantes sur nos services.",
+    "items": [
+      {
+        "title": "Combien coûte la création d'un site web ?",
+        "content": "Le coût dépend de la complexité du projet. Un site vitrine démarre à partir de 1 500€, un site e-commerce à partir de 3 000€. Nous établissons un devis gratuit et détaillé après analyse de vos besoins."
+      },
+      {
+        "title": "Quels sont les délais de réalisation ?",
+        "content": "En moyenne, un site vitrine est livré en 3 à 4 semaines, un e-commerce en 6 à 8 semaines. Ces délais dépendent de la complexité et de la réactivité pour les retours."
+      },
+      {
+        "title": "Proposez-vous la maintenance après la mise en ligne ?",
+        "content": "Oui, nous proposons des contrats de maintenance mensuelle incluant les mises à jour, la sécurité, les sauvegardes et le support technique. Votre site reste performant et sécurisé."
+      },
+      {
+        "title": "Mon site sera-t-il optimisé pour le référencement (SEO) ?",
+        "content": "Absolument. L'optimisation SEO est intégrée dès la conception : structure technique, balises, vitesse de chargement, contenu optimisé et compatibilité mobile."
+      },
+      {
+        "title": "Travaillez-vous avec des clients en dehors de la Belgique ?",
+        "content": "Oui, nous travaillons avec des clients dans toute la Belgique et à l'international. Nous communiquons en français, néerlandais et anglais."
+      },
+      {
+        "title": "Puis-je modifier mon site moi-même après la livraison ?",
+        "content": "Oui, tous nos sites sont livrés avec un système de gestion de contenu (CMS) intuitif. Nous vous formons à son utilisation pour que vous puissiez être autonome."
+      }
+    ]
+  },
+  "contact": {
+    "label": "Contactez-nous",
+    "title": "Prêt à",
+    "morphingWords": ["transformer", "propulser", "dominer"],
+    "titleEnd": "votre présence en ligne ?",
+    "description": "Discutons de votre projet. Nous vous proposons une consultation gratuite pour analyser vos besoins et définir la meilleure stratégie pour votre entreprise.",
+    "phone": "Téléphone",
+    "email": "Email",
+    "location": "Localisation",
+    "locationValue": "Bruxelles, Belgique",
+    "formTitle": "Demandez votre devis gratuit",
+    "formName": "Nom",
+    "formNamePlaceholder": "Votre nom",
+    "formEmail": "Email",
+    "formEmailPlaceholder": "votre@email.com",
+    "formSubject": "Sujet",
+    "formSubjectPlaceholder": "Sélectionnez un service",
+    "formSubjectOptions": {
+      "web": "Création de site web",
+      "design": "Design graphique",
+      "social": "Réseaux sociaux",
+      "ads": "Publicité digitale",
+      "other": "Autre"
+    },
+    "formMessage": "Message",
+    "formMessagePlaceholder": "Décrivez votre projet...",
+    "formSubmit": "Envoyer ma demande"
+  },
+  "footer": {
+    "description": "Agence digitale belge spécialisée en création web, design graphique, réseaux sociaux et publicité digitale. Transformez votre présence en ligne.",
+    "servicesTitle": "Services",
+    "servicesLinks": [
+      "Création de sites web",
+      "Design graphique",
+      "Réseaux sociaux",
+      "Publicité digitale",
+      "Solutions digitales"
+    ],
+    "companyTitle": "Entreprise",
+    "companyLinks": {
+      "about": "À propos",
+      "process": "Notre processus",
+      "faq": "FAQ",
+      "contact": "Contact"
+    },
+    "contactTitle": "Contact",
+    "legal": "Mentions légales",
+    "privacy": "Politique de confidentialité",
+    "copyright": "© 2024 The Webmaster. Tous droits réservés."
+  }
+}

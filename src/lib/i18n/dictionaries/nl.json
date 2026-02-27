@@ -1,0 +1,276 @@
+{
+  "nav": {
+    "home": "Home",
+    "services": "Diensten",
+    "troubleshooting": "Probleemoplossing",
+    "process": "Werkwijze",
+    "about": "Over ons",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "cta": "Gratis offerte"
+  },
+  "hero": {
+    "badge": "Digitaal Agentschap in België",
+    "title1": "Uw Digitale Strategie,",
+    "title2": "Onze Expertise",
+    "description": "Wij creëren digitale ervaringen die uw business transformeren en vooruit stuwen. Websites, design, sociale media en advertenties — alles om uw markt online te domineren.",
+    "ctaPrimary": "Start uw project",
+    "ctaSecondary": "Ontdek onze diensten",
+    "heroImageAlt": "Digitale strategie - The Webmaster"
+  },
+  "services": {
+    "label": "Onze Diensten",
+    "title": "Volledige oplossingen voor uw",
+    "titleHighlight": "digitale aanwezigheid",
+    "description": "Van ontwerp tot promotie, wij begeleiden uw onderneming bij elke stap van haar digitale transformatie.",
+    "items": [
+      {
+        "title": "Websites Maken",
+        "description": "Bedrijfswebsites, e-commerce en webapplicaties op maat. Modern design, SEO-geoptimaliseerd en maximale prestaties."
+      },
+      {
+        "title": "Grafisch Ontwerp",
+        "description": "Visuele identiteit, logo's, print- en digitale materialen. Een samenhangende en gedenkwaardige merkidentiteit voor uw onderneming."
+      },
+      {
+        "title": "Sociale Media",
+        "description": "Social media-strategie, contentcreatie en community management. Vergroot uw publiek en betrek uw gemeenschap."
+      },
+      {
+        "title": "Digitale Advertenties",
+        "description": "Google Ads-, Meta Ads- en LinkedIn-campagnes. Maximaliseer uw ROI met gerichte en meetbare campagnes."
+      },
+      {
+        "title": "SEO & Zoekmachineoptimalisatie",
+        "description": "SEO-audit, on-page en off-page optimalisatie, contentstrategie. Verbeter uw zichtbaarheid op Google en trek meer klanten aan."
+      },
+      {
+        "title": "Digitale Oplossingen",
+        "description": "Automatisering, AI-tools, integraties en onderhoud. Technologische oplossingen om uw activiteiten te optimaliseren."
+      },
+      {
+        "title": "E-mailmarketing",
+        "description": "Nieuwsbrieven, e-mailcampagnes, marketing automation. Bouw klantenloyaliteit op en genereer gekwalificeerde leads."
+      },
+      {
+        "title": "Hosting & Onderhoud",
+        "description": "Krachtige webhosting, onderhoud, updates en technische ondersteuning. Uw website altijd online en beveiligd."
+      },
+      {
+        "title": "Opleiding & Consulting",
+        "description": "Digitale opleiding, strategische begeleiding en consulting. Breid uw vaardigheden uit en neem de juiste beslissingen."
+      }
+    ]
+  },
+  "sos": {
+    "label": "SOS WordPress",
+    "title": "Heeft uw WordPress-website",
+    "titleHighlight": "problemen",
+    "titleEnd": "?",
+    "description": "Geen paniek! Ons team van experts staat klaar om al uw technische problemen snel te diagnosticeren en op te lossen.",
+    "problems": [
+      "Weergaveproblemen of trage website",
+      "Functionaliteiten die niet meer werken",
+      "Foutcodes of wit scherm",
+      "Abnormale laadtijden"
+    ],
+    "whyUs": [
+      {
+        "title": "Erkende expertise",
+        "description": "WordPress-specialisten met jarenlange ervaring."
+      },
+      {
+        "title": "Snelle interventie",
+        "description": "Onmiddellijke aanpak om uw dringende problemen op te lossen."
+      },
+      {
+        "title": "Oplossingen op maat",
+        "description": "Elke interventie wordt aangepast aan uw situatie."
+      },
+      {
+        "title": "Toegankelijke tarieven",
+        "description": "Transparante en concurrerende prijzen zonder verrassingen."
+      }
+    ],
+    "pricing": [
+      {
+        "title": "Urgentie",
+        "price": 150,
+        "suffix": "+",
+        "description": "Snelle interventie om een kritiek probleem op uw website op te lossen.",
+        "features": [
+          "Aanpak binnen 2 uur",
+          "Oplossing van het probleem",
+          "Interventierapport"
+        ],
+        "cta": "Ik heb hulp nodig",
+        "highlighted": true
+      },
+      {
+        "title": "Diagnose",
+        "price": 65,
+        "suffix": "+",
+        "description": "Volledige analyse van uw website om alle problemen te identificeren.",
+        "features": [
+          "Volledige technische audit",
+          "Gedetailleerd rapport",
+          "Gepersonaliseerde aanbevelingen"
+        ],
+        "cta": "Mijn website laten analyseren",
+        "highlighted": false
+      },
+      {
+        "title": "Onderhoud",
+        "price": 29,
+        "suffix": "/maand",
+        "description": "Houd uw website in perfecte staat met regelmatige opvolging.",
+        "features": [
+          "Regelmatige updates",
+          "Automatische back-ups",
+          "Prioritaire ondersteuning"
+        ],
+        "cta": "Abonnement nemen",
+        "highlighted": false
+      }
+    ]
+  },
+  "process": {
+    "label": "Onze Werkwijze",
+    "title": "Begeleiding in",
+    "rotatingWords": ["3 stappen", "alle vertrouwen", "alle transparantie"],
+    "description": "Een beproefde methodologie om het succes van uw digitaal project te garanderen.",
+    "steps": [
+      {
+        "step": "01",
+        "title": "Consultatie",
+        "description": "Wij analyseren uw behoeften, uw markt en uw doelstellingen om een digitale strategie op maat te bepalen."
+      },
+      {
+        "step": "02",
+        "title": "Ontwerp & Creatie",
+        "description": "Ons team ontwerpt en ontwikkelt uw project met de nieuwste technologieën en de beste praktijken uit de sector."
+      },
+      {
+        "step": "03",
+        "title": "Lancering & Opvolging",
+        "description": "Livegang, opleiding en opvolging van de prestaties. Wij blijven aan uw zijde om uw resultaten te optimaliseren."
+      }
+    ]
+  },
+  "about": {
+    "label": "Waarom voor ons kiezen",
+    "title": "Een strategische aanpak voor",
+    "titleHighlight": "concrete resultaten",
+    "description": "Net als bij schaken telt elke zet in de digitale wereld. Wij werken doordachte strategieën uit en voeren ze met precisie uit om uw onderneming als marktleider te positioneren.",
+    "advantages": [
+      "Geavanceerde technische expertise (Next.js, React, WordPress)",
+      "Design op maat, afgestemd op uw merkidentiteit",
+      "SEO-optimalisatie geïntegreerd vanaf het ontwerp",
+      "Persoonlijke begeleiding van A tot Z",
+      "Meetbare resultaten en transparante ROI",
+      "Reactieve ondersteuning en doorlopend onderhoud"
+    ],
+    "cta": "Meer weten",
+    "imageAlt": "Digitale expertise - The Webmaster"
+  },
+  "usps": [
+    {
+      "title": "Snelle uitvoering",
+      "description": "Korte levertijden dankzij onze geoptimaliseerde processen en technische expertise."
+    },
+    {
+      "title": "Gegarandeerde kwaliteit",
+      "description": "Schone code, optimale prestaties en versterkte beveiliging bij elk opgeleverd project."
+    },
+    {
+      "title": "Begeleiding op maat",
+      "description": "Een vast aanspreekpunt en persoonlijke opvolging bij elke stap van uw project."
+    },
+    {
+      "title": "Meetbare resultaten",
+      "description": "Duidelijke KPI's en een transparante ROI voor elke ondernomen actie."
+    }
+  ],
+  "faq": {
+    "label": "FAQ",
+    "title": "Veelgestelde",
+    "titleHighlight": "vragen",
+    "description": "Vind hier de antwoorden op de meest voorkomende vragen over onze diensten.",
+    "items": [
+      {
+        "title": "Hoeveel kost het maken van een website?",
+        "content": "De kosten hangen af van de complexiteit van het project. Een bedrijfswebsite begint vanaf 1 500€, een e-commerce website vanaf 3 000€. Wij stellen een gratis en gedetailleerde offerte op na analyse van uw behoeften."
+      },
+      {
+        "title": "Wat zijn de levertijden?",
+        "content": "Gemiddeld wordt een bedrijfswebsite opgeleverd in 3 tot 4 weken, een e-commerce website in 6 tot 8 weken. Deze termijnen hangen af van de complexiteit en de snelheid van uw feedback."
+      },
+      {
+        "title": "Bieden jullie onderhoud aan na de livegang?",
+        "content": "Ja, wij bieden maandelijkse onderhoudscontracten aan inclusief updates, beveiliging, back-ups en technische ondersteuning. Uw website blijft performant en beveiligd."
+      },
+      {
+        "title": "Wordt mijn website geoptimaliseerd voor zoekmachines (SEO)?",
+        "content": "Absoluut. SEO-optimalisatie is vanaf het ontwerp geïntegreerd: technische structuur, tags, laadsnelheid, geoptimaliseerde content en mobiele compatibiliteit."
+      },
+      {
+        "title": "Werken jullie ook met klanten buiten België?",
+        "content": "Ja, wij werken met klanten in heel België en internationaal. Wij communiceren in het Frans, Nederlands en Engels."
+      },
+      {
+        "title": "Kan ik mijn website zelf aanpassen na oplevering?",
+        "content": "Ja, al onze websites worden opgeleverd met een intuïtief contentmanagementsysteem (CMS). Wij leiden u op in het gebruik ervan zodat u zelfstandig aan de slag kunt."
+      }
+    ]
+  },
+  "contact": {
+    "label": "Neem contact op",
+    "title": "Klaar om uw online aanwezigheid te",
+    "morphingWords": ["transformeren", "lanceren", "domineren"],
+    "titleEnd": "?",
+    "description": "Laten we uw project bespreken. Wij bieden u een gratis consultatie aan om uw behoeften te analyseren en de beste strategie voor uw onderneming te bepalen.",
+    "phone": "Telefoon",
+    "email": "E-mail",
+    "location": "Locatie",
+    "locationValue": "Brussel, België",
+    "formTitle": "Vraag uw gratis offerte aan",
+    "formName": "Naam",
+    "formNamePlaceholder": "Uw naam",
+    "formEmail": "E-mail",
+    "formEmailPlaceholder": "uw@email.com",
+    "formSubject": "Onderwerp",
+    "formSubjectPlaceholder": "Selecteer een dienst",
+    "formSubjectOptions": {
+      "web": "Website laten maken",
+      "design": "Grafisch ontwerp",
+      "social": "Sociale media",
+      "ads": "Digitale advertenties",
+      "other": "Andere"
+    },
+    "formMessage": "Bericht",
+    "formMessagePlaceholder": "Beschrijf uw project...",
+    "formSubmit": "Mijn aanvraag versturen"
+  },
+  "footer": {
+    "description": "Belgisch digitaal agentschap gespecialiseerd in webontwikkeling, grafisch ontwerp, sociale media en digitale advertenties. Transformeer uw online aanwezigheid.",
+    "servicesTitle": "Diensten",
+    "servicesLinks": [
+      "Websites maken",
+      "Grafisch ontwerp",
+      "Sociale media",
+      "Digitale advertenties",
+      "Digitale oplossingen"
+    ],
+    "companyTitle": "Bedrijf",
+    "companyLinks": {
+      "about": "Over ons",
+      "process": "Onze werkwijze",
+      "faq": "FAQ",
+      "contact": "Contact"
+    },
+    "contactTitle": "Contact",
+    "legal": "Juridische vermeldingen",
+    "privacy": "Privacybeleid",
+    "copyright": "© 2024 The Webmaster. Alle rechten voorbehouden."
+  }
+}

@@ -49,29 +49,80 @@ import {
   MagneticHover,
   CountUp,
 } from "@/components/animations";
+import type { Dictionary } from "@/lib/i18n/get-dictionary";
+import type { LucideIcon } from "lucide-react";
+
+// =============================================================================
+// ICON MAPS (icons can't be serialized in JSON dictionaries)
+// =============================================================================
+
+const serviceIcons: LucideIcon[] = [
+  Globe,
+  Palette,
+  Share2,
+  Megaphone,
+  Search,
+  MonitorSmartphone,
+  MailOpen,
+  Server,
+  GraduationCap,
+];
+
+const sosProblemIcons: LucideIcon[] = [
+  AlertTriangle,
+  Wrench,
+  AlertTriangle,
+  Gauge,
+];
+
+const sosWhyUsIcons: LucideIcon[] = [
+  BadgeCheck,
+  Rocket,
+  HeartHandshake,
+  Euro,
+];
+
+const uspIcons: LucideIcon[] = [Zap, Shield, HeartHandshake, Award];
 
 // =============================================================================
 // HOMEPAGE — TheWebmaster.pro
 // =============================================================================
 
-export default function Home() {
+interface HomeClientProps {
+  dictionary: Dictionary;
+  locale: string;
+}
+
+export default function HomeClient({ dictionary, locale }: HomeClientProps) {
+  const d = dictionary;
+
+  const navLinks = [
+    { label: d.nav.home, href: "#accueil" },
+    { label: d.nav.services, href: "#services" },
+    { label: d.nav.troubleshooting, href: "#sos" },
+    { label: d.nav.process, href: "#processus" },
+    { label: d.nav.about, href: "#about" },
+    { label: d.nav.faq, href: "#faq" },
+    { label: d.nav.contact, href: "#contact" },
+  ];
+
   return (
     <main>
-      <Navbar />
-      <HeroSection />
+      <Navbar links={navLinks} ctaLabel={d.nav.cta} ctaHref="#contact" locale={locale} />
+      <HeroSection d={d} />
       <GoldDivider />
-      <ServicesSection />
+      <ServicesSection d={d} />
       <GoldDivider />
-      <SOSSection />
+      <SOSSection d={d} />
       <GoldDivider />
-      <ProcessSection />
+      <ProcessSection d={d} />
       <GoldDivider />
-      <AboutSection />
+      <AboutSection d={d} />
       <GoldDivider />
-      <FAQSectionBlock />
+      <FAQSectionBlock d={d} />
       <GoldDivider />
-      <CTASection />
-      <SiteFooter />
+      <CTASection d={d} />
+      <SiteFooter d={d} locale={locale} />
     </main>
   );
 }
@@ -94,7 +145,7 @@ function GoldDivider() {
 // HERO SECTION
 // =============================================================================
 
-function HeroSection() {
+function HeroSection({ d }: { d: Dictionary }) {
   return (
     <section
       id="accueil"
@@ -105,7 +156,7 @@ function HeroSection() {
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
             src="/images/hero-chess-king-gold.png"
-            alt="Stratégie digitale - The Webmaster"
+            alt={d.hero.heroImageAlt}
             fill
             className="object-cover object-center"
             priority
@@ -126,7 +177,7 @@ function HeroSection() {
             <MagneticHover strength={0.2}>
               <p className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-primary/30 bg-primary/10 text-primary text-sm font-medium mb-8">
                 <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                Agence Digitale en Belgique
+                {d.hero.badge}
               </p>
             </MagneticHover>
           </FadeIn>
@@ -138,20 +189,18 @@ function HeroSection() {
               duration={0.5}
               className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] block"
             >
-              Votre Stratégie Digitale,
+              {d.hero.title1}
             </SplitWords>
             <FadeIn delay={0.8} direction="up">
               <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] text-gold-shimmer">
-                Notre Expertise
+                {d.hero.title2}
               </span>
             </FadeIn>
           </div>
 
           <ScrollReveal animation="blur" delay={1.0} duration={0.8}>
             <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mb-10 leading-relaxed">
-              Nous créons des expériences digitales qui transforment et
-              propulsent votre business. Sites web, design, réseaux sociaux et
-              publicité — tout pour dominer votre marché en ligne.
+              {d.hero.description}
             </p>
           </ScrollReveal>
 
@@ -160,7 +209,7 @@ function HeroSection() {
               <MagneticHover strength={0.15}>
                 <Button asChild size="lg" className="text-base h-12 px-8">
                   <Link href="#contact">
-                    Démarrer votre projet
+                    {d.hero.ctaPrimary}
                     <ArrowRight className="w-5 h-5 ml-2" />
                   </Link>
                 </Button>
@@ -172,7 +221,7 @@ function HeroSection() {
                   size="lg"
                   className="text-base h-12 px-8"
                 >
-                  <Link href="#services">Découvrir nos services</Link>
+                  <Link href="#services">{d.hero.ctaSecondary}</Link>
                 </Button>
               </MagneticHover>
             </div>
@@ -196,64 +245,7 @@ function HeroSection() {
 // SERVICES SECTION
 // =============================================================================
 
-const services = [
-  {
-    icon: Globe,
-    title: "Création de Sites Web",
-    description:
-      "Sites vitrines, e-commerce et applications web sur mesure. Design moderne, SEO optimisé et performances maximales.",
-  },
-  {
-    icon: Palette,
-    title: "Design Graphique",
-    description:
-      "Identité visuelle, logos, supports print et digitaux. Une image de marque cohérente et mémorable pour votre entreprise.",
-  },
-  {
-    icon: Share2,
-    title: "Réseaux Sociaux",
-    description:
-      "Stratégie social media, création de contenu et community management. Développez votre audience et engagez votre communauté.",
-  },
-  {
-    icon: Megaphone,
-    title: "Publicité Digitale",
-    description:
-      "Campagnes Google Ads, Meta Ads et LinkedIn. Maximisez votre ROI avec des campagnes ciblées et mesurables.",
-  },
-  {
-    icon: Search,
-    title: "SEO & Référencement",
-    description:
-      "Audit SEO, optimisation on-page et off-page, stratégie de contenu. Améliorez votre visibilité sur Google et attirez plus de clients.",
-  },
-  {
-    icon: MonitorSmartphone,
-    title: "Solutions Digitales",
-    description:
-      "Automatisation, outils IA, intégrations et maintenance. Des solutions technologiques pour optimiser votre activité.",
-  },
-  {
-    icon: MailOpen,
-    title: "Email Marketing",
-    description:
-      "Newsletters, campagnes email, automation marketing. Fidélisez vos clients et générez des leads qualifiés.",
-  },
-  {
-    icon: Server,
-    title: "Hébergement & Maintenance",
-    description:
-      "Hébergement web performant, maintenance, mises à jour et support technique. Votre site toujours en ligne et sécurisé.",
-  },
-  {
-    icon: GraduationCap,
-    title: "Formation & Consulting",
-    description:
-      "Formation digitale, accompagnement stratégique et consulting. Montez en compétences et prenez les bonnes décisions.",
-  },
-];
-
-function ServicesSection() {
+function ServicesSection({ d }: { d: Dictionary }) {
   return (
     <section id="services" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background */}
@@ -273,19 +265,18 @@ function ServicesSection() {
         <div className="text-center mb-16">
           <ScrollReveal animation="fade">
             <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-              Nos Services
+              {d.services.label}
             </p>
           </ScrollReveal>
           <ScrollReveal animation="slide-up" duration={0.6}>
             <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">
-              Des solutions complètes pour votre{" "}
-              <span className="text-primary">présence digitale</span>
+              {d.services.title}{" "}
+              <span className="text-primary">{d.services.titleHighlight}</span>
             </h2>
           </ScrollReveal>
           <ScrollReveal animation="blur" delay={0.3}>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              De la conception à la promotion, nous accompagnons votre
-              entreprise à chaque étape de sa transformation numérique.
+              {d.services.description}
             </p>
           </ScrollReveal>
         </div>
@@ -294,19 +285,24 @@ function ServicesSection() {
           className="grid gap-6 md:grid-cols-2 lg:grid-cols-3"
           staggerDelay={0.1}
         >
-          {services.map((service) => (
-            <HoverLift key={service.title} y={-6} shadow>
-              <div className="group relative p-8 rounded-2xl border border-border/50 bg-card/50 backdrop-blur-sm card-hover-glow h-full">
-                <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-6 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
-                  <service.icon className="w-7 h-7 text-primary" />
+          {d.services.items.map((service, index) => {
+            const Icon = serviceIcons[index] || Globe;
+            return (
+              <HoverLift key={service.title} y={-6} shadow>
+                <div className="group relative p-8 rounded-2xl border border-border/50 bg-card/50 backdrop-blur-sm card-hover-glow h-full">
+                  <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-6 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
+                    <Icon className="w-7 h-7 text-primary" />
+                  </div>
+                  <h3 className="text-xl font-semibold mb-3">
+                    {service.title}
+                  </h3>
+                  <p className="text-muted-foreground leading-relaxed">
+                    {service.description}
+                  </p>
                 </div>
-                <h3 className="text-xl font-semibold mb-3">{service.title}</h3>
-                <p className="text-muted-foreground leading-relaxed">
-                  {service.description}
-                </p>
-              </div>
-            </HoverLift>
-          ))}
+              </HoverLift>
+            );
+          })}
         </StaggerChildren>
       </div>
     </section>
@@ -317,79 +313,7 @@ function ServicesSection() {
 // SOS WORDPRESS SECTION
 // =============================================================================
 
-const sosProblems = [
-  { icon: AlertTriangle, text: "Problèmes d'affichage ou site lent" },
-  { icon: Wrench, text: "Fonctionnalités qui ne marchent plus" },
-  { icon: AlertTriangle, text: "Codes d'erreur ou écran blanc" },
-  { icon: Gauge, text: "Temps de chargement anormaux" },
-];
-
-const sosWhyUs = [
-  {
-    icon: BadgeCheck,
-    title: "Expertise reconnue",
-    description: "Des spécialistes WordPress avec des années d'expérience.",
-  },
-  {
-    icon: Rocket,
-    title: "Intervention rapide",
-    description: "Prise en charge immédiate pour résoudre vos urgences.",
-  },
-  {
-    icon: HeartHandshake,
-    title: "Solutions sur mesure",
-    description: "Chaque intervention est adaptée à votre situation.",
-  },
-  {
-    icon: Euro,
-    title: "Tarifs accessibles",
-    description: "Des prix transparents et compétitifs sans surprise.",
-  },
-];
-
-const sosPricing = [
-  {
-    title: "Urgence",
-    price: 150,
-    description:
-      "Intervention rapide pour résoudre un problème critique sur votre site.",
-    features: [
-      "Prise en charge sous 2h",
-      "Correction du problème",
-      "Rapport d'intervention",
-    ],
-    cta: "J'ai besoin d'aide",
-    highlighted: true,
-  },
-  {
-    title: "Diagnostic",
-    price: 65,
-    description:
-      "Analyse complète de votre site pour identifier tous les problèmes.",
-    features: [
-      "Audit technique complet",
-      "Rapport détaillé",
-      "Recommandations personnalisées",
-    ],
-    cta: "Faire analyser mon site",
-    highlighted: false,
-  },
-  {
-    title: "Maintenance",
-    price: 29,
-    suffix: "/mois",
-    description: "Gardez votre site en parfait état avec un suivi régulier.",
-    features: [
-      "Mises à jour régulières",
-      "Sauvegardes automatiques",
-      "Support prioritaire",
-    ],
-    cta: "Souscrire un abonnement",
-    highlighted: false,
-  },
-];
-
-function SOSSection() {
+function SOSSection({ d }: { d: Dictionary }) {
   return (
     <section id="sos" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background */}
@@ -413,32 +337,35 @@ function SOSSection() {
           className="text-center mb-16"
         >
           <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-            SOS WordPress
+            {d.sos.label}
           </p>
           <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">
-            Votre site WordPress a des{" "}
-            <span className="text-primary">problèmes</span> ?
+            {d.sos.title}{" "}
+            <span className="text-primary">{d.sos.titleHighlight}</span>
+            {d.sos.titleEnd ? ` ${d.sos.titleEnd}` : ""}
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Pas de panique ! Notre équipe d&apos;experts est là pour
-            diagnostiquer et résoudre rapidement tous vos soucis techniques.
+            {d.sos.description}
           </p>
         </ScrollReveal>
 
         {/* Problems list */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto mb-20">
-          {sosProblems.map((problem, index) => (
-            <ScrollReveal
-              key={problem.text}
-              animation={index % 2 === 0 ? "slide-left" : "slide-right"}
-              delay={index * 0.1}
-            >
-              <div className="flex items-center gap-3 p-4 rounded-xl border border-border/50 bg-card/50">
-                <problem.icon className="w-5 h-5 text-primary shrink-0" />
-                <span className="text-sm">{problem.text}</span>
-              </div>
-            </ScrollReveal>
-          ))}
+          {d.sos.problems.map((problem, index) => {
+            const Icon = sosProblemIcons[index] || AlertTriangle;
+            return (
+              <ScrollReveal
+                key={problem}
+                animation={index % 2 === 0 ? "slide-left" : "slide-right"}
+                delay={index * 0.1}
+              >
+                <div className="flex items-center gap-3 p-4 rounded-xl border border-border/50 bg-card/50">
+                  <Icon className="w-5 h-5 text-primary shrink-0" />
+                  <span className="text-sm">{problem}</span>
+                </div>
+              </ScrollReveal>
+            );
+          })}
         </div>
 
         {/* Why choose us */}
@@ -446,19 +373,22 @@ function SOSSection() {
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-20"
           staggerDelay={0.1}
         >
-          {sosWhyUs.map((item) => (
-            <HoverScale key={item.title} scale={1.05}>
-              <div className="group text-center p-4 rounded-xl card-hover-glow">
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
-                  <item.icon className="w-6 h-6 text-primary" />
+          {d.sos.whyUs.map((item, index) => {
+            const Icon = sosWhyUsIcons[index] || BadgeCheck;
+            return (
+              <HoverScale key={item.title} scale={1.05}>
+                <div className="group text-center p-4 rounded-xl card-hover-glow">
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
+                    <Icon className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">{item.title}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {item.description}
+                  </p>
                 </div>
-                <h3 className="text-lg font-semibold mb-2">{item.title}</h3>
-                <p className="text-sm text-muted-foreground">
-                  {item.description}
-                </p>
-              </div>
-            </HoverScale>
-          ))}
+              </HoverScale>
+            );
+          })}
         </StaggerChildren>
 
         {/* Pricing cards */}
@@ -466,7 +396,7 @@ function SOSSection() {
           className="grid gap-6 md:grid-cols-3"
           staggerDelay={0.1}
         >
-          {sosPricing.map((plan) => (
+          {d.sos.pricing.map((plan) => (
             <HoverTilt key={plan.title} tiltDegree={5} scale={1.02}>
               <div
                 className={`relative p-8 rounded-2xl border backdrop-blur-sm transition-all duration-300 h-full card-hover-glow ${
@@ -478,7 +408,7 @@ function SOSSection() {
                 <h3 className="text-xl font-semibold mb-2">{plan.title}</h3>
                 <div className="flex items-baseline gap-1 mb-4">
                   <span className="text-4xl font-bold text-primary">
-                    €<CountUp to={plan.price} duration={1.5} />
+                    &euro;<CountUp to={plan.price} duration={1.5} />
                   </span>
                   <span className="text-muted-foreground">
                     {plan.suffix || "+"}
@@ -518,28 +448,7 @@ function SOSSection() {
 // PROCESS SECTION
 // =============================================================================
 
-const processSteps = [
-  {
-    step: "01",
-    title: "Consultation",
-    description:
-      "Nous analysons vos besoins, votre marché et vos objectifs pour définir une stratégie digitale sur mesure.",
-  },
-  {
-    step: "02",
-    title: "Conception & Création",
-    description:
-      "Notre équipe conçoit et développe votre projet avec les dernières technologies et les meilleures pratiques du secteur.",
-  },
-  {
-    step: "03",
-    title: "Lancement & Suivi",
-    description:
-      "Mise en ligne, formation et suivi des performances. Nous restons à vos côtés pour optimiser vos résultats.",
-  },
-];
-
-function ProcessSection() {
+function ProcessSection({ d }: { d: Dictionary }) {
   return (
     <section
       id="processus"
@@ -561,24 +470,23 @@ function ProcessSection() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <ScrollReveal animation="slide-up" className="text-center mb-16">
           <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-            Notre Processus
+            {d.process.label}
           </p>
           <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">
-            Un accompagnement en{" "}
+            {d.process.title}{" "}
             <RotatingWords
-              words={["3 étapes", "toute confiance", "toute transparence"]}
+              words={d.process.rotatingWords}
               interval={3000}
               wordClassName="text-primary"
             />
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Une méthodologie éprouvée pour garantir le succès de votre projet
-            digital.
+            {d.process.description}
           </p>
         </ScrollReveal>
 
         <div className="grid gap-8 md:grid-cols-3 max-w-5xl mx-auto">
-          {processSteps.map((item, index) => (
+          {d.process.steps.map((item, index) => (
             <ScaleIn key={item.step} delay={index * 0.2} scale={0.7}>
               <div className="relative text-center p-8 rounded-2xl border border-border/50 bg-card/50 card-hover-glow">
                 <span className="text-7xl font-bold text-primary/10 font-[family-name:var(--font-display)]">
@@ -603,43 +511,7 @@ function ProcessSection() {
 // ABOUT / WHY CHOOSE US + USP SECTION (merged)
 // =============================================================================
 
-const advantages = [
-  "Expertise technique de pointe (Next.js, React, WordPress)",
-  "Design sur mesure adapté à votre image de marque",
-  "Optimisation SEO intégrée dès la conception",
-  "Accompagnement personnalisé de A à Z",
-  "Résultats mesurables et ROI transparent",
-  "Support réactif et maintenance continue",
-];
-
-const usps = [
-  {
-    icon: Zap,
-    title: "Rapidité d'exécution",
-    description:
-      "Des délais de livraison courts grâce à nos processus optimisés et notre expertise technique.",
-  },
-  {
-    icon: Shield,
-    title: "Qualité garantie",
-    description:
-      "Code propre, performances optimales et sécurité renforcée sur chaque projet livré.",
-  },
-  {
-    icon: HeartHandshake,
-    title: "Accompagnement sur mesure",
-    description:
-      "Un interlocuteur dédié et un suivi personnalisé à chaque étape de votre projet.",
-  },
-  {
-    icon: Award,
-    title: "Résultats mesurables",
-    description:
-      "Des KPIs clairs et un ROI transparent pour chaque action mise en place.",
-  },
-];
-
-function AboutSection() {
+function AboutSection({ d }: { d: Dictionary }) {
   return (
     <section id="about" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background */}
@@ -665,7 +537,7 @@ function AboutSection() {
             >
               <Image
                 src="/images/hero-chess-knight-close.png"
-                alt="Expertise digitale - The Webmaster"
+                alt={d.about.imageAlt}
                 fill
                 className="object-cover"
               />
@@ -677,19 +549,17 @@ function AboutSection() {
           <SlideIn direction="right">
             <div>
               <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-                Pourquoi nous choisir
+                {d.about.label}
               </p>
               <h2 className="text-3xl md:text-4xl font-bold mb-6">
-                Une approche stratégique pour des{" "}
-                <span className="text-primary">résultats concrets</span>
+                {d.about.title}{" "}
+                <span className="text-primary">{d.about.titleHighlight}</span>
               </h2>
               <p className="text-muted-foreground leading-relaxed mb-8">
-                Comme aux échecs, chaque mouvement compte dans le digital. Nous
-                élaborons des stratégies réfléchies et exécutons avec précision
-                pour positionner votre entreprise en leader sur son marché.
+                {d.about.description}
               </p>
               <ul className="space-y-4">
-                {advantages.map((advantage, index) => (
+                {d.about.advantages.map((advantage, index) => (
                   <ScrollReveal
                     key={advantage}
                     animation="slide-left"
@@ -705,7 +575,7 @@ function AboutSection() {
               <MagneticHover strength={0.2}>
                 <Button asChild size="lg" className="mt-8">
                   <Link href="#contact">
-                    En savoir plus
+                    {d.about.cta}
                     <ArrowRight className="w-5 h-5 ml-2" />
                   </Link>
                 </Button>
@@ -719,24 +589,27 @@ function AboutSection() {
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mt-20"
           staggerDelay={0.1}
         >
-          {usps.map((usp) => (
-            <HoverGlow
-              key={usp.title}
-              color="oklch(0.78 0.145 75 / 0.3)"
-              blur={25}
-              className="rounded-xl"
-            >
-              <div className="group text-center p-6 rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm card-hover-glow">
-                <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
-                  <usp.icon className="w-6 h-6 text-primary" />
+          {d.usps.map((usp, index) => {
+            const Icon = uspIcons[index] || Zap;
+            return (
+              <HoverGlow
+                key={usp.title}
+                color="oklch(0.78 0.145 75 / 0.3)"
+                blur={25}
+                className="rounded-xl"
+              >
+                <div className="group text-center p-6 rounded-xl border border-border/50 bg-card/50 backdrop-blur-sm card-hover-glow">
+                  <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center mx-auto mb-4 group-hover:bg-primary/20 group-hover:animate-icon-float transition-colors">
+                    <Icon className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">{usp.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    {usp.description}
+                  </p>
                 </div>
-                <h3 className="text-lg font-semibold mb-2">{usp.title}</h3>
-                <p className="text-sm text-muted-foreground leading-relaxed">
-                  {usp.description}
-                </p>
-              </div>
-            </HoverGlow>
-          ))}
+              </HoverGlow>
+            );
+          })}
         </StaggerChildren>
       </div>
     </section>
@@ -747,46 +620,13 @@ function AboutSection() {
 // FAQ SECTION
 // =============================================================================
 
-const faqItems = [
-  {
-    id: "faq-1",
-    title: "Combien coûte la création d'un site web ?",
-    content:
-      "Le coût dépend de la complexité du projet. Un site vitrine démarre à partir de 1 500€, un site e-commerce à partir de 3 000€. Nous établissons un devis gratuit et détaillé après analyse de vos besoins.",
-  },
-  {
-    id: "faq-2",
-    title: "Quels sont les délais de réalisation ?",
-    content:
-      "En moyenne, un site vitrine est livré en 3 à 4 semaines, un e-commerce en 6 à 8 semaines. Ces délais dépendent de la complexité et de la réactivité pour les retours.",
-  },
-  {
-    id: "faq-3",
-    title: "Proposez-vous la maintenance après la mise en ligne ?",
-    content:
-      "Oui, nous proposons des contrats de maintenance mensuelle incluant les mises à jour, la sécurité, les sauvegardes et le support technique. Votre site reste performant et sécurisé.",
-  },
-  {
-    id: "faq-4",
-    title: "Mon site sera-t-il optimisé pour le référencement (SEO) ?",
-    content:
-      "Absolument. L'optimisation SEO est intégrée dès la conception : structure technique, balises, vitesse de chargement, contenu optimisé et compatibilité mobile.",
-  },
-  {
-    id: "faq-5",
-    title: "Travaillez-vous avec des clients en dehors de la Belgique ?",
-    content:
-      "Oui, nous travaillons avec des clients dans toute la Belgique et à l'international. Nous communiquons en français, néerlandais et anglais.",
-  },
-  {
-    id: "faq-6",
-    title: "Puis-je modifier mon site moi-même après la livraison ?",
-    content:
-      "Oui, tous nos sites sont livrés avec un système de gestion de contenu (CMS) intuitif. Nous vous formons à son utilisation pour que vous puissiez être autonome.",
-  },
-];
+function FAQSectionBlock({ d }: { d: Dictionary }) {
+  const faqItems = d.faq.items.map((item, index) => ({
+    id: `faq-${index + 1}`,
+    title: item.title,
+    content: item.content,
+  }));
 
-function FAQSectionBlock() {
   return (
     <section id="faq" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background */}
@@ -806,18 +646,18 @@ function FAQSectionBlock() {
         <div className="text-center mb-16">
           <ScrollReveal animation="fade">
             <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-              FAQ
+              {d.faq.label}
             </p>
           </ScrollReveal>
           <ScrollReveal animation="slide-up" delay={0.1}>
             <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-4">
-              Questions <span className="text-primary">fréquentes</span>
+              {d.faq.title}{" "}
+              <span className="text-primary">{d.faq.titleHighlight}</span>
             </h2>
           </ScrollReveal>
           <ScrollReveal animation="blur" delay={0.3}>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Retrouvez les réponses aux questions les plus courantes sur nos
-              services.
+              {d.faq.description}
             </p>
           </ScrollReveal>
         </div>
@@ -834,7 +674,7 @@ function FAQSectionBlock() {
 // CTA / CONTACT SECTION
 // =============================================================================
 
-function CTASection() {
+function CTASection({ d }: { d: Dictionary }) {
   return (
     <section id="contact" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background Image with Parallax */}
@@ -842,7 +682,7 @@ function CTASection() {
         <ParallaxScroll speed={0.2} className="absolute inset-0">
           <Image
             src="/images/hero-chess-pawn-data.png"
-            alt="Contact The Webmaster"
+            alt=""
             fill
             className="object-cover"
           />
@@ -856,22 +696,20 @@ function CTASection() {
           <FadeIn>
             <div>
               <p className="text-sm font-semibold text-primary uppercase tracking-wider mb-3">
-                Contactez-nous
+                {d.contact.label}
               </p>
               <h2 className="text-3xl md:text-4xl lg:text-5xl font-bold mb-6">
-                Prêt à{" "}
+                {d.contact.title}{" "}
                 <MorphingText
-                  texts={["transformer", "propulser", "dominer"]}
+                  texts={d.contact.morphingWords}
                   interval={2500}
                   duration={0.4}
                   className="text-primary"
                 />{" "}
-                votre présence en ligne ?
+                {d.contact.titleEnd}
               </h2>
               <p className="text-lg text-muted-foreground leading-relaxed mb-8">
-                Discutons de votre projet. Nous vous proposons une consultation
-                gratuite pour analyser vos besoins et définir la meilleure
-                stratégie pour votre entreprise.
+                {d.contact.description}
               </p>
 
               <div className="space-y-4">
@@ -879,13 +717,13 @@ function CTASection() {
                   {
                     href: "tel:+32491348143",
                     icon: Phone,
-                    label: "Téléphone",
+                    label: d.contact.phone,
                     value: "+32 491 34 81 43",
                   },
                   {
                     href: "mailto:contact@thewebmaster.pro",
                     icon: Mail,
-                    label: "Email",
+                    label: d.contact.email,
                     value: "contact@thewebmaster.pro",
                   },
                 ].map((item, index) => (
@@ -920,9 +758,9 @@ function CTASection() {
                     </span>
                     <div>
                       <p className="text-sm text-muted-foreground">
-                        Localisation
+                        {d.contact.location}
                       </p>
-                      <p className="font-semibold">Bruxelles, Belgique</p>
+                      <p className="font-semibold">{d.contact.locationValue}</p>
                     </div>
                   </div>
                 </ScrollReveal>
@@ -939,7 +777,7 @@ function CTASection() {
             >
               <div className="p-8 md:p-10 rounded-2xl border border-border/50 bg-card/80 backdrop-blur-sm">
                 <h3 className="text-2xl font-bold mb-6">
-                  Demandez votre devis gratuit
+                  {d.contact.formTitle}
                 </h3>
                 <form
                   className="space-y-5"
@@ -951,12 +789,12 @@ function CTASection() {
                         htmlFor="name"
                         className="block text-sm font-medium mb-2"
                       >
-                        Nom
+                        {d.contact.formName}
                       </label>
                       <input
                         type="text"
                         id="name"
-                        placeholder="Votre nom"
+                        placeholder={d.contact.formNamePlaceholder}
                         className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                       />
                     </div>
@@ -965,12 +803,12 @@ function CTASection() {
                         htmlFor="email"
                         className="block text-sm font-medium mb-2"
                       >
-                        Email
+                        {d.contact.formEmail}
                       </label>
                       <input
                         type="email"
                         id="email"
-                        placeholder="votre@email.com"
+                        placeholder={d.contact.formEmailPlaceholder}
                         className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                       />
                     </div>
@@ -980,18 +818,22 @@ function CTASection() {
                       htmlFor="subject"
                       className="block text-sm font-medium mb-2"
                     >
-                      Sujet
+                      {d.contact.formSubject}
                     </label>
                     <select
                       id="subject"
                       className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                     >
-                      <option value="">Sélectionnez un service</option>
-                      <option value="web">Création de site web</option>
-                      <option value="design">Design graphique</option>
-                      <option value="social">Réseaux sociaux</option>
-                      <option value="ads">Publicité digitale</option>
-                      <option value="other">Autre</option>
+                      <option value="">
+                        {d.contact.formSubjectPlaceholder}
+                      </option>
+                      {Object.entries(d.contact.formSubjectOptions).map(
+                        ([key, label]) => (
+                          <option key={key} value={key}>
+                            {label}
+                          </option>
+                        )
+                      )}
                     </select>
                   </div>
                   <div>
@@ -999,18 +841,18 @@ function CTASection() {
                       htmlFor="message"
                       className="block text-sm font-medium mb-2"
                     >
-                      Message
+                      {d.contact.formMessage}
                     </label>
                     <textarea
                       id="message"
                       rows={4}
-                      placeholder="Décrivez votre projet..."
+                      placeholder={d.contact.formMessagePlaceholder}
                       className="w-full px-4 py-3 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm resize-none"
                     />
                   </div>
                   <MagneticHover strength={0.15}>
                     <Button type="submit" size="lg" className="w-full">
-                      Envoyer ma demande
+                      {d.contact.formSubmit}
                       <ArrowRight className="w-5 h-5 ml-2" />
                     </Button>
                   </MagneticHover>
@@ -1028,7 +870,7 @@ function CTASection() {
 // FOOTER
 // =============================================================================
 
-function SiteFooter() {
+function SiteFooter({ d, locale }: { d: Dictionary; locale: string }) {
   return (
     <Footer
       logo={
@@ -1036,36 +878,33 @@ function SiteFooter() {
           The<span className="text-primary">Webmaster</span>
         </span>
       }
-      description="Agence digitale belge spécialisée en création web, design graphique, réseaux sociaux et publicité digitale. Transformez votre présence en ligne."
+      description={d.footer.description}
       columns={[
         {
-          title: "Services",
+          title: d.footer.servicesTitle,
+          links: d.footer.servicesLinks.map((label) => ({
+            label,
+            url: "#services",
+          })),
+        },
+        {
+          title: d.footer.companyTitle,
           links: [
-            { label: "Création de sites web", url: "#services" },
-            { label: "Design graphique", url: "#services" },
-            { label: "Réseaux sociaux", url: "#services" },
-            { label: "Publicité digitale", url: "#services" },
-            { label: "Solutions digitales", url: "#services" },
+            { label: d.footer.companyLinks.about, url: "#about" },
+            { label: d.footer.companyLinks.process, url: "#processus" },
+            { label: d.footer.companyLinks.faq, url: "#faq" },
+            { label: d.footer.companyLinks.contact, url: "#contact" },
           ],
         },
         {
-          title: "Entreprise",
-          links: [
-            { label: "À propos", url: "#about" },
-            { label: "Notre processus", url: "#processus" },
-            { label: "FAQ", url: "#faq" },
-            { label: "Contact", url: "#contact" },
-          ],
-        },
-        {
-          title: "Contact",
+          title: d.footer.contactTitle,
           links: [
             { label: "+32 491 34 81 43", url: "tel:+32491348143" },
             {
               label: "contact@thewebmaster.pro",
               url: "mailto:contact@thewebmaster.pro",
             },
-            { label: "Bruxelles, Belgique", url: "#contact" },
+            { label: d.contact.locationValue, url: "#contact" },
           ],
         },
       ]}
@@ -1084,13 +923,16 @@ function SiteFooter() {
         },
       ]}
       legal={[
-        { label: "Mentions légales", url: "/mentions-legales" },
         {
-          label: "Politique de confidentialité",
-          url: "/politique-de-confidentialite",
+          label: d.footer.legal,
+          url: `/${locale}/mentions-legales`,
+        },
+        {
+          label: d.footer.privacy,
+          url: `/${locale}/politique-de-confidentialite`,
         },
       ]}
-      copyright="© 2024 The Webmaster. Tous droits réservés."
+      copyright={d.footer.copyright}
     />
   );
 }

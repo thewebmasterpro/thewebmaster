@@ -1,0 +1,276 @@
+{
+  "nav": {
+    "home": "Home",
+    "services": "Services",
+    "troubleshooting": "Troubleshooting",
+    "process": "Process",
+    "about": "About",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "cta": "Free quote"
+  },
+  "hero": {
+    "badge": "Digital Agency in Belgium",
+    "title1": "Your Digital Strategy,",
+    "title2": "Our Expertise",
+    "description": "We create digital experiences that transform and propel your business. Websites, design, social media and advertising — everything to dominate your market online.",
+    "ctaPrimary": "Start your project",
+    "ctaSecondary": "Discover our services",
+    "heroImageAlt": "Digital strategy - The Webmaster"
+  },
+  "services": {
+    "label": "Our Services",
+    "title": "Complete solutions for your",
+    "titleHighlight": "digital presence",
+    "description": "From design to promotion, we support your business at every stage of its digital transformation.",
+    "items": [
+      {
+        "title": "Website Creation",
+        "description": "Showcase sites, e-commerce and bespoke web applications. Modern design, SEO-optimised and maximum performance."
+      },
+      {
+        "title": "Graphic Design",
+        "description": "Visual identity, logos, print and digital materials. A coherent and memorable brand image for your business."
+      },
+      {
+        "title": "Social Media",
+        "description": "Social media strategy, content creation and community management. Grow your audience and engage your community."
+      },
+      {
+        "title": "Digital Advertising",
+        "description": "Google Ads, Meta Ads and LinkedIn campaigns. Maximise your ROI with targeted and measurable campaigns."
+      },
+      {
+        "title": "SEO & Search Ranking",
+        "description": "SEO audit, on-page and off-page optimisation, content strategy. Improve your visibility on Google and attract more clients."
+      },
+      {
+        "title": "Digital Solutions",
+        "description": "Automation, AI tools, integrations and maintenance. Technology solutions to optimise your business operations."
+      },
+      {
+        "title": "Email Marketing",
+        "description": "Newsletters, email campaigns, marketing automation. Retain your clients and generate qualified leads."
+      },
+      {
+        "title": "Hosting & Maintenance",
+        "description": "High-performance web hosting, maintenance, updates and technical support. Your site always online and secure."
+      },
+      {
+        "title": "Training & Consulting",
+        "description": "Digital training, strategic guidance and consulting. Upskill your team and make the right decisions."
+      }
+    ]
+  },
+  "sos": {
+    "label": "SOS WordPress",
+    "title": "Is your WordPress site experiencing",
+    "titleHighlight": "problems",
+    "titleEnd": "?",
+    "description": "Don't panic! Our team of experts is here to quickly diagnose and resolve all your technical issues.",
+    "problems": [
+      "Display issues or slow site",
+      "Features that no longer work",
+      "Error codes or white screen",
+      "Abnormal loading times"
+    ],
+    "whyUs": [
+      {
+        "title": "Recognised expertise",
+        "description": "WordPress specialists with years of experience."
+      },
+      {
+        "title": "Rapid response",
+        "description": "Immediate support to resolve your emergencies."
+      },
+      {
+        "title": "Tailored solutions",
+        "description": "Every intervention is adapted to your situation."
+      },
+      {
+        "title": "Affordable rates",
+        "description": "Transparent and competitive pricing with no surprises."
+      }
+    ],
+    "pricing": [
+      {
+        "title": "Emergency",
+        "price": 150,
+        "suffix": "+",
+        "description": "Rapid intervention to resolve a critical issue on your site.",
+        "features": [
+          "Response within 2 hours",
+          "Problem resolution",
+          "Intervention report"
+        ],
+        "cta": "I need help",
+        "highlighted": true
+      },
+      {
+        "title": "Diagnostic",
+        "price": 65,
+        "suffix": "+",
+        "description": "Complete analysis of your site to identify all issues.",
+        "features": [
+          "Full technical audit",
+          "Detailed report",
+          "Personalised recommendations"
+        ],
+        "cta": "Have my site analysed",
+        "highlighted": false
+      },
+      {
+        "title": "Maintenance",
+        "price": 29,
+        "suffix": "/month",
+        "description": "Keep your site in perfect condition with regular monitoring.",
+        "features": [
+          "Regular updates",
+          "Automatic backups",
+          "Priority support"
+        ],
+        "cta": "Subscribe",
+        "highlighted": false
+      }
+    ]
+  },
+  "process": {
+    "label": "Our Process",
+    "title": "Support in",
+    "rotatingWords": ["3 steps", "full confidence", "full transparency"],
+    "description": "A proven methodology to guarantee the success of your digital project.",
+    "steps": [
+      {
+        "step": "01",
+        "title": "Consultation",
+        "description": "We analyse your needs, your market and your goals to define a bespoke digital strategy."
+      },
+      {
+        "step": "02",
+        "title": "Design & Creation",
+        "description": "Our team designs and develops your project using the latest technologies and industry best practices."
+      },
+      {
+        "step": "03",
+        "title": "Launch & Follow-up",
+        "description": "Go live, training and performance monitoring. We stay by your side to optimise your results."
+      }
+    ]
+  },
+  "about": {
+    "label": "Why choose us",
+    "title": "A strategic approach for",
+    "titleHighlight": "tangible results",
+    "description": "As in chess, every move counts in digital. We develop well-considered strategies and execute with precision to position your business as a leader in its market.",
+    "advantages": [
+      "Cutting-edge technical expertise (Next.js, React, WordPress)",
+      "Bespoke design tailored to your brand image",
+      "SEO optimisation integrated from the design stage",
+      "Personalised support from start to finish",
+      "Measurable results and transparent ROI",
+      "Responsive support and ongoing maintenance"
+    ],
+    "cta": "Learn more",
+    "imageAlt": "Digital expertise - The Webmaster"
+  },
+  "usps": [
+    {
+      "title": "Speed of delivery",
+      "description": "Short delivery times thanks to our optimised processes and technical expertise."
+    },
+    {
+      "title": "Guaranteed quality",
+      "description": "Clean code, optimal performance and enhanced security on every delivered project."
+    },
+    {
+      "title": "Tailored support",
+      "description": "A dedicated point of contact and personalised follow-up at every stage of your project."
+    },
+    {
+      "title": "Measurable results",
+      "description": "Clear KPIs and transparent ROI for every action implemented."
+    }
+  ],
+  "faq": {
+    "label": "FAQ",
+    "title": "Frequently asked",
+    "titleHighlight": "questions",
+    "description": "Find answers to the most common questions about our services.",
+    "items": [
+      {
+        "title": "How much does it cost to create a website?",
+        "content": "The cost depends on the complexity of the project. A showcase website starts from 1,500€, an e-commerce site from 3,000€. We provide a free and detailed quote after analysing your needs."
+      },
+      {
+        "title": "What are the delivery timeframes?",
+        "content": "On average, a showcase website is delivered in 3 to 4 weeks, an e-commerce site in 6 to 8 weeks. These timeframes depend on the complexity and responsiveness of feedback."
+      },
+      {
+        "title": "Do you offer maintenance after going live?",
+        "content": "Yes, we offer monthly maintenance contracts including updates, security, backups and technical support. Your site remains performant and secure."
+      },
+      {
+        "title": "Will my site be optimised for SEO?",
+        "content": "Absolutely. SEO optimisation is integrated from the design stage: technical structure, meta tags, loading speed, optimised content and mobile compatibility."
+      },
+      {
+        "title": "Do you work with clients outside Belgium?",
+        "content": "Yes, we work with clients throughout Belgium and internationally. We communicate in French, Dutch and English."
+      },
+      {
+        "title": "Can I edit my site myself after delivery?",
+        "content": "Yes, all our sites are delivered with an intuitive content management system (CMS). We train you on how to use it so you can be fully autonomous."
+      }
+    ]
+  },
+  "contact": {
+    "label": "Contact us",
+    "title": "Ready to",
+    "morphingWords": ["transform", "propel", "dominate"],
+    "titleEnd": "your online presence?",
+    "description": "Let's discuss your project. We offer a free consultation to analyse your needs and define the best strategy for your business.",
+    "phone": "Phone",
+    "email": "Email",
+    "location": "Location",
+    "locationValue": "Brussels, Belgium",
+    "formTitle": "Request your free quote",
+    "formName": "Name",
+    "formNamePlaceholder": "Your name",
+    "formEmail": "Email",
+    "formEmailPlaceholder": "your@email.com",
+    "formSubject": "Subject",
+    "formSubjectPlaceholder": "Select a service",
+    "formSubjectOptions": {
+      "web": "Website creation",
+      "design": "Graphic design",
+      "social": "Social media",
+      "ads": "Digital advertising",
+      "other": "Other"
+    },
+    "formMessage": "Message",
+    "formMessagePlaceholder": "Describe your project...",
+    "formSubmit": "Send my request"
+  },
+  "footer": {
+    "description": "Belgian digital agency specialising in web creation, graphic design, social media and digital advertising. Transform your online presence.",
+    "servicesTitle": "Services",
+    "servicesLinks": [
+      "Website creation",
+      "Graphic design",
+      "Social media",
+      "Digital advertising",
+      "Digital solutions"
+    ],
+    "companyTitle": "Company",
+    "companyLinks": {
+      "about": "About",
+      "process": "Our process",
+      "faq": "FAQ",
+      "contact": "Contact"
+    },
+    "contactTitle": "Contact",
+    "legal": "Legal notice",
+    "privacy": "Privacy policy",
+    "copyright": "© 2024 The Webmaster. All rights reserved."
+  }
+}
