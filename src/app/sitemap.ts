@@ -1,43 +1,27 @@
 import { MetadataRoute } from "next";
 import { seoConfig } from "@/lib/seo.config";
-
-// =============================================================================
-// SITEMAP
-// Auto-generates sitemap.xml for search engines
-// Add your routes here or fetch them dynamically from CMS
-// =============================================================================
+import { locales } from "@/lib/i18n/config";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const baseUrl = seoConfig.siteUrl;
-  
-  // Static pages
-  const staticPages = [
-    "",
-    "/about",
-    "/services",
-    "/contact",
-    "/blog",
+
+  const pages = [
+    { path: "", priority: 1, changeFrequency: "weekly" as const },
+    { path: "/mentions-legales", priority: 0.3, changeFrequency: "yearly" as const },
+    { path: "/politique-de-confidentialite", priority: 0.3, changeFrequency: "yearly" as const },
   ];
 
-  const staticRoutes = staticPages.map((route) => ({
-    url: `${baseUrl}${route}`,
-    lastModified: new Date(),
-    changeFrequency: "monthly" as const,
-    priority: route === "" ? 1 : 0.8,
-  }));
-
-  // Dynamic pages (fetch from CMS/database)
-  // Example: blog posts
-  // const posts = await getBlogPosts();
-  // const blogRoutes = posts.map((post) => ({
-  //   url: `${baseUrl}/blog/${post.slug}`,
-  //   lastModified: post.updatedAt,
-  //   changeFrequency: "weekly" as const,
-  //   priority: 0.6,
-  // }));
-
-  return [
-    ...staticRoutes,
-    // ...blogRoutes,
-  ];
+  return pages.flatMap((page) =>
+    locales.map((locale) => ({
+      url: `${baseUrl}/${locale}${page.path}`,
+      lastModified: new Date(),
+      changeFrequency: page.changeFrequency,
+      priority: page.priority,
+      alternates: {
+        languages: Object.fromEntries(
+          locales.map((l) => [l, `${baseUrl}/${l}${page.path}`])
+        ),
+      },
+    }))
+  );
 }

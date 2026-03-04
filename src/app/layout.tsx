@@ -20,6 +20,10 @@ export default function RootLayout({
           data-website-id="f8bfa504-b4d8-4b3a-b40f-45fe1aa76f81"
           strategy="afterInteractive"
         />
+        <Script
+          src={`https://www.google.com/recaptcha/api.js?render=${process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY}`}
+          strategy="afterInteractive"
+        />
       </head>
       <body className={`${fontVariables} antialiased`}>
         <Providers>

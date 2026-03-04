@@ -249,7 +249,11 @@
     },
     "formMessage": "Message",
     "formMessagePlaceholder": "Décrivez votre projet...",
-    "formSubmit": "Envoyer ma demande"
+    "formSubmit": "Envoyer ma demande",
+    "formSending": "Envoi en cours...",
+    "formSuccess": "Votre message a bien été envoyé ! Nous vous répondrons dans les plus brefs délais.",
+    "formError": "Une erreur est survenue. Veuillez réessayer ou nous contacter directement par téléphone.",
+    "formRequired": "Veuillez remplir tous les champs obligatoires."
   },
   "footer": {
     "description": "Agence digitale belge spécialisée en création web, design graphique, réseaux sociaux et publicité digitale. Transformez votre présence en ligne.",

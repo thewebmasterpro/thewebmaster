@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -675,6 +676,54 @@ function FAQSectionBlock({ d }: { d: Dictionary }) {
 // =============================================================================
 
 function CTASection({ d }: { d: Dictionary }) {
+  const [form, setForm] = useState({
+    name: "",
+    email: "",
+    subject: "",
+    message: "",
+  });
+  const [status, setStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+
+  const handleChange = (
+    e: React.ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
+    >
+  ) => {
+    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.name || !form.email || !form.message) {
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    try {
+      const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
+      let recaptchaToken = "";
+      if (siteKey && window.grecaptcha) {
+        recaptchaToken = await window.grecaptcha.execute(siteKey, {
+          action: "contact",
+        });
+      }
+
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...form, recaptchaToken }),
+      });
+      if (!res.ok) throw new Error("Failed");
+      setStatus("success");
+      setForm({ name: "", email: "", subject: "", message: "" });
+    } catch {
+      setStatus("error");
+    }
+  };
+
   return (
     <section id="contact" className="relative py-24 md:py-32 overflow-hidden">
       {/* Background Image with Parallax */}
@@ -779,84 +828,129 @@ function CTASection({ d }: { d: Dictionary }) {
                 <h3 className="text-2xl font-bold mb-6">
                   {d.contact.formTitle}
                 </h3>
-                <form
-                  className="space-y-5"
-                  onSubmit={(e) => e.preventDefault()}
-                >
-                  <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                      <label
-                        htmlFor="name"
-                        className="block text-sm font-medium mb-2"
-                      >
-                        {d.contact.formName}
-                      </label>
-                      <input
-                        type="text"
-                        id="name"
-                        placeholder={d.contact.formNamePlaceholder}
-                        className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor="email"
-                        className="block text-sm font-medium mb-2"
-                      >
-                        {d.contact.formEmail}
-                      </label>
-                      <input
-                        type="email"
-                        id="email"
-                        placeholder={d.contact.formEmailPlaceholder}
-                        className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="subject"
-                      className="block text-sm font-medium mb-2"
+
+                {status === "success" ? (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <CheckCircle2 className="w-12 h-12 text-green-500 mb-4" />
+                    <p className="text-lg font-semibold mb-2">
+                      {d.contact.formSuccess}
+                    </p>
+                    <Button
+                      variant="outline"
+                      className="mt-4"
+                      onClick={() => setStatus("idle")}
                     >
-                      {d.contact.formSubject}
-                    </label>
-                    <select
-                      id="subject"
-                      className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
-                    >
-                      <option value="">
-                        {d.contact.formSubjectPlaceholder}
-                      </option>
-                      {Object.entries(d.contact.formSubjectOptions).map(
-                        ([key, label]) => (
-                          <option key={key} value={key}>
-                            {label}
-                          </option>
-                        )
-                      )}
-                    </select>
-                  </div>
-                  <div>
-                    <label
-                      htmlFor="message"
-                      className="block text-sm font-medium mb-2"
-                    >
-                      {d.contact.formMessage}
-                    </label>
-                    <textarea
-                      id="message"
-                      rows={4}
-                      placeholder={d.contact.formMessagePlaceholder}
-                      className="w-full px-4 py-3 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm resize-none"
-                    />
-                  </div>
-                  <MagneticHover strength={0.15}>
-                    <Button type="submit" size="lg" className="w-full">
-                      {d.contact.formSubmit}
-                      <ArrowRight className="w-5 h-5 ml-2" />
+                      OK
                     </Button>
-                  </MagneticHover>
-                </form>
+                  </div>
+                ) : (
+                  <form className="space-y-5" onSubmit={handleSubmit}>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      <div>
+                        <label
+                          htmlFor="name"
+                          className="block text-sm font-medium mb-2"
+                        >
+                          {d.contact.formName}
+                        </label>
+                        <input
+                          type="text"
+                          id="name"
+                          name="name"
+                          required
+                          value={form.name}
+                          onChange={handleChange}
+                          placeholder={d.contact.formNamePlaceholder}
+                          className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor="email"
+                          className="block text-sm font-medium mb-2"
+                        >
+                          {d.contact.formEmail}
+                        </label>
+                        <input
+                          type="email"
+                          id="email"
+                          name="email"
+                          required
+                          value={form.email}
+                          onChange={handleChange}
+                          placeholder={d.contact.formEmailPlaceholder}
+                          className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="subject"
+                        className="block text-sm font-medium mb-2"
+                      >
+                        {d.contact.formSubject}
+                      </label>
+                      <select
+                        id="subject"
+                        name="subject"
+                        value={form.subject}
+                        onChange={handleChange}
+                        className="w-full h-11 px-4 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
+                      >
+                        <option value="">
+                          {d.contact.formSubjectPlaceholder}
+                        </option>
+                        {Object.entries(d.contact.formSubjectOptions).map(
+                          ([key, label]) => (
+                            <option key={key} value={label}>
+                              {label}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="message"
+                        className="block text-sm font-medium mb-2"
+                      >
+                        {d.contact.formMessage}
+                      </label>
+                      <textarea
+                        id="message"
+                        name="message"
+                        required
+                        rows={4}
+                        value={form.message}
+                        onChange={handleChange}
+                        placeholder={d.contact.formMessagePlaceholder}
+                        className="w-full px-4 py-3 rounded-lg border bg-background/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm resize-none"
+                      />
+                    </div>
+
+                    {status === "error" && (
+                      <p className="text-sm text-red-500">
+                        {d.contact.formError}
+                      </p>
+                    )}
+
+                    <MagneticHover strength={0.15}>
+                      <Button
+                        type="submit"
+                        size="lg"
+                        className="w-full"
+                        disabled={status === "loading"}
+                      >
+                        {status === "loading"
+                          ? d.contact.formSending
+                          : d.contact.formSubmit}
+                        {status !== "loading" && (
+                          <ArrowRight className="w-5 h-5 ml-2" />
+                        )}
+                      </Button>
+                    </MagneticHover>
+                  </form>
+                )}
               </div>
             </HoverGlow>
           </ScaleIn>

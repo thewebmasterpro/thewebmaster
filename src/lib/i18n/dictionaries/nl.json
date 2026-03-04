@@ -249,7 +249,11 @@
     },
     "formMessage": "Bericht",
     "formMessagePlaceholder": "Beschrijf uw project...",
-    "formSubmit": "Mijn aanvraag versturen"
+    "formSubmit": "Mijn aanvraag versturen",
+    "formSending": "Bezig met verzenden...",
+    "formSuccess": "Uw bericht is succesvol verzonden! Wij nemen zo snel mogelijk contact met u op.",
+    "formError": "Er is een fout opgetreden. Probeer het opnieuw of neem telefonisch contact met ons op.",
+    "formRequired": "Vul alstublieft alle verplichte velden in."
   },
   "footer": {
     "description": "Belgisch digitaal agentschap gespecialiseerd in webontwikkeling, grafisch ontwerp, sociale media en digitale advertenties. Transformeer uw online aanwezigheid.",

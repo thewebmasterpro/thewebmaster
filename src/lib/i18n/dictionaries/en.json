@@ -249,7 +249,11 @@
     },
     "formMessage": "Message",
     "formMessagePlaceholder": "Describe your project...",
-    "formSubmit": "Send my request"
+    "formSubmit": "Send my request",
+    "formSending": "Sending...",
+    "formSuccess": "Your message has been sent successfully! We will get back to you as soon as possible.",
+    "formError": "An error occurred. Please try again or contact us directly by phone.",
+    "formRequired": "Please fill in all required fields."
   },
   "footer": {
     "description": "Belgian digital agency specialising in web creation, graphic design, social media and digital advertising. Transform your online presence.",
