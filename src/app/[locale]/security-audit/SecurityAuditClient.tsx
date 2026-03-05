@@ -45,12 +45,25 @@ interface AuditCheck {
   recommendation?: string;
 }
 
+interface CategoryScore {
+  category: string;
+  label: string;
+  score: number;
+  grade: string;
+  total: number;
+  passed: number;
+  warned: number;
+  failed: number;
+}
+
 interface AuditResult {
   url: string;
   timestamp: string;
   score: number;
   grade: string;
+  status: "production-ready" | "needs-fixes" | "at-risk" | "critical";
   checks: AuditCheck[];
+  categoryScores: CategoryScore[];
   responseTime: number;
   tlsInfo: { secure: boolean; protocol?: string };
   technologies: string[];
@@ -204,123 +217,298 @@ function CheckCard({ check }: { check: AuditCheck }) {
 // AUTO-GENERATED REPORT
 // =============================================================================
 
+const statusLabels: Record<string, string> = {
+  "production-ready": "✅ Production Ready",
+  "needs-fixes": "⚠️ Nécessite des corrections",
+  "at-risk": "🟠 À risque",
+  critical: "🔴 Critique — Action immédiate requise",
+};
+
 function generateReportText(result: AuditResult): string {
   const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+    weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
   });
+  const time = new Date(result.timestamp).toLocaleTimeString("fr-BE", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
   const hostname = new URL(result.url).hostname;
 
-  const criticals = result.checks.filter((c) => c.severity === "critical");
-  const highs = result.checks.filter((c) => c.severity === "high");
+  const criticals = result.checks.filter((c) => c.severity === "critical" && c.status === "fail");
+  const highs = result.checks.filter((c) => c.severity === "high" && c.status === "fail");
   const mediums = result.checks.filter((c) => c.severity === "medium");
   const lows = result.checks.filter((c) => c.severity === "low");
   const passes = result.checks.filter((c) => c.status === "pass");
   const fails = result.checks.filter((c) => c.status === "fail");
   const warns = result.checks.filter((c) => c.status === "warn");
 
-  let report = `═══════════════════════════════════════════════════════════════\n`;
-  report += `  RAPPORT D'AUDIT DE SÉCURITÉ — ${hostname.toUpperCase()}\n`;
-  report += `  Date : ${date}  |  Score : ${result.score}/100 (${result.grade})\n`;
-  report += `  Temps de réponse : ${result.responseTime}ms  |  HTTPS : ${result.tlsInfo.secure ? "Oui" : "Non"}\n`;
-  report += `═══════════════════════════════════════════════════════════════\n\n`;
+  const line = `───────────────────────────────────────────────────────────────`;
+  const doubleLine = `═══════════════════════════════════════════════════════════════`;
 
-  // Summary
-  report += `RÉSUMÉ\n`;
-  report += `───────────────────────────────────────────────────────────────\n`;
-  report += `  ${result.checks.length} vérifications effectuées\n`;
-  report += `  ✅ ${passes.length} réussi(es)  |  ⚠️ ${warns.length} alerte(s)  |  ❌ ${fails.length} échec(s)\n`;
-  if (criticals.length > 0) report += `  🔴 ${criticals.length} vulnérabilité(s) CRITIQUE(S)\n`;
-  if (highs.length > 0) report += `  🟠 ${highs.length} vulnérabilité(s) de sévérité ÉLEVÉE\n`;
-  if (mediums.length > 0) report += `  🟡 ${mediums.length} point(s) de sévérité MOYENNE\n`;
-  if (lows.length > 0) report += `  🔵 ${lows.length} point(s) de sévérité FAIBLE\n`;
-  report += `\n`;
+  let r = "";
 
-  // Technologies
-  if (result.technologies.length > 0) {
-    report += `TECHNOLOGIES DÉTECTÉES\n`;
-    report += `───────────────────────────────────────────────────────────────\n`;
-    report += `  ${result.technologies.join(", ")}\n\n`;
+  // ─── HEADER ──────────────────────────────────────────────────
+  r += `${doubleLine}\n`;
+  r += `  RAPPORT D'AUDIT DE SÉCURITÉ WEB\n`;
+  r += `  ${hostname.toUpperCase()}\n`;
+  r += `${doubleLine}\n\n`;
+
+  // ─── 1. RÉSUMÉ EXÉCUTIF ──────────────────────────────────────
+  r += `🎯 1. RÉSUMÉ EXÉCUTIF\n`;
+  r += `${line}\n\n`;
+  r += `  URL analysée :     ${result.url}\n`;
+  r += `  Date :             ${date}, ${time}\n`;
+  r += `  Score global :     ${result.score}/100 (${result.grade})\n`;
+  r += `  Statut :           ${statusLabels[result.status]}\n`;
+  r += `  Temps de réponse : ${result.responseTime}ms\n`;
+  r += `  HTTPS :            ${result.tlsInfo.secure ? "Oui ✅" : "Non ❌"}\n\n`;
+
+  r += `  Vulnérabilités par sévérité :\n`;
+  r += `  🔴 Critiques : ${criticals.length}     🟠 Élevées : ${highs.length}\n`;
+  r += `  🟡 Moyennes :  ${mediums.length}     🔵 Faibles : ${lows.length}\n\n`;
+
+  r += `  Résultats : ${passes.length} ✅  |  ${warns.length} ⚠️  |  ${fails.length} ❌  (${result.checks.length} tests)\n\n`;
+
+  // Top 5 actions
+  const topActions = [...criticals, ...highs, ...mediums.filter((c) => c.status !== "pass")]
+    .filter((c) => c.recommendation)
+    .slice(0, 5);
+  if (topActions.length > 0) {
+    r += `  Actions prioritaires :\n`;
+    topActions.forEach((c, i) => {
+      r += `  ${i + 1}. ${c.recommendation}\n`;
+    });
+    r += `\n`;
   }
 
-  // Critical & High — Actions immédiates
+  // Timeline
+  if (criticals.length > 0) r += `  ⏰ Timeline : Corrections critiques sous 24h\n`;
+  else if (highs.length > 0) r += `  ⏰ Timeline : Corrections élevées sous 7 jours\n`;
+  else if (mediums.length > 0) r += `  ⏰ Timeline : Améliorations sous 30 jours\n`;
+  else r += `  ⏰ Timeline : Maintenance régulière recommandée\n`;
+  r += `\n`;
+
+  // ─── 2. SCOPE & MÉTHODOLOGIE ─────────────────────────────────
+  r += `🔍 2. SCOPE & MÉTHODOLOGIE\n`;
+  r += `${line}\n\n`;
+  r += `  Périmètre :\n`;
+  r += `  • URL principale : ${result.url}\n`;
+  r += `  • Type d'analyse : Externe (boîte noire)\n`;
+  r += `  • ${result.checks.length} vérifications automatisées\n\n`;
+
+  if (result.technologies.length > 0) {
+    r += `  Technologies identifiées :\n`;
+    result.technologies.forEach((t) => {
+      r += `  • ${t}\n`;
+    });
+    r += `\n`;
+  }
+
+  r += `  Méthodes utilisées :\n`;
+  r += `  • Analyse des en-têtes HTTP de sécurité\n`;
+  r += `  • Vérification SSL/TLS et configuration HTTPS\n`;
+  r += `  • Scan de fichiers et répertoires sensibles (OWASP)\n`;
+  r += `  • Analyse DNS (SPF, DMARC, DKIM, DNSSEC)\n`;
+  r += `  • Détection WAF et infrastructure\n`;
+  r += `  • Audit de conformité RGPD\n`;
+  r += `  • Analyse du code source HTML (XSS, CSRF)\n`;
+  r += `  • Vérification monitoring et réponse aux incidents\n\n`;
+
+  r += `  Standards de référence :\n`;
+  r += `  • OWASP Top 10 (2021)\n`;
+  r += `  • RGPD (Règlement Général sur la Protection des Données)\n`;
+  r += `  • RFC 9116 (security.txt)\n`;
+  r += `  • Mozilla Observatory / Security Headers\n\n`;
+
+  // ─── 3. SCORES PAR CATÉGORIE ─────────────────────────────────
+  r += `📊 3. SCORES PAR CATÉGORIE\n`;
+  r += `${line}\n\n`;
+
+  const maxLabelLen = Math.max(...result.categoryScores.map((cs) => cs.label.length));
+  result.categoryScores.forEach((cs) => {
+    const bar = "█".repeat(Math.round(cs.score / 5)) + "░".repeat(20 - Math.round(cs.score / 5));
+    const pad = " ".repeat(maxLabelLen - cs.label.length);
+    r += `  ${cs.label}${pad}  ${bar}  ${cs.score}/100 (${cs.grade})\n`;
+  });
+
+  // Global
+  const globalBar = "█".repeat(Math.round(result.score / 5)) + "░".repeat(20 - Math.round(result.score / 5));
+  r += `  ${"─".repeat(maxLabelLen + 30)}\n`;
+  r += `  ${"SCORE GLOBAL"}${" ".repeat(maxLabelLen - 12)}  ${globalBar}  ${result.score}/100 (${result.grade})\n\n`;
+
+  // ─── 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES ───────────────────
   const urgent = [...criticals, ...highs];
   if (urgent.length > 0) {
-    report += `🚨 ACTIONS IMMÉDIATES REQUISES\n`;
-    report += `───────────────────────────────────────────────────────────────\n`;
+    r += `🚨 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES\n`;
+    r += `${line}\n`;
     urgent.forEach((c, i) => {
-      const sev = c.severity === "critical" ? "CRITIQUE" : "ÉLEVÉ";
-      report += `\n  ${i + 1}. [${sev}] ${c.name}\n`;
-      report += `     Problème : ${c.description}\n`;
-      if (c.value) report += `     Valeur : ${c.value}\n`;
-      if (c.recommendation) report += `     → Action : ${c.recommendation}\n`;
+      const sev = c.severity === "critical" ? "🔴 CRITIQUE" : "🟠 ÉLEVÉ";
+      r += `\n  ${sev}: ${c.name}\n`;
+      r += `  ├─ Description :    ${c.description}\n`;
+      if (c.value) r += `  ├─ Valeur :        ${c.value}\n`;
+      r += `  ├─ Impact :        ${c.severity === "critical" ? "Compromission possible du système" : "Risque significatif pour la sécurité"}\n`;
+      r += `  ├─ Correction :    ${c.severity === "critical" ? "0-24h" : "1-7 jours"}\n`;
+      if (c.recommendation) r += `  └─ Remédiation :   ${c.recommendation}\n`;
     });
-    report += `\n`;
-  }
-
-  // Medium — Améliorations importantes
-  if (mediums.length > 0) {
-    report += `⚠️ AMÉLIORATIONS IMPORTANTES\n`;
-    report += `───────────────────────────────────────────────────────────────\n`;
-    mediums.forEach((c, i) => {
-      report += `\n  ${i + 1}. ${c.name}\n`;
-      report += `     ${c.description}\n`;
-      if (c.recommendation) report += `     → ${c.recommendation}\n`;
-    });
-    report += `\n`;
-  }
-
-  // Low — Recommandations
-  if (lows.length > 0) {
-    report += `💡 RECOMMANDATIONS\n`;
-    report += `───────────────────────────────────────────────────────────────\n`;
-    lows.forEach((c, i) => {
-      report += `  ${i + 1}. ${c.name} — ${c.description}`;
-      if (c.recommendation) report += ` → ${c.recommendation}`;
-      report += `\n`;
-    });
-    report += `\n`;
-  }
-
-  // Points positifs
-  if (passes.length > 0) {
-    report += `✅ POINTS POSITIFS\n`;
-    report += `───────────────────────────────────────────────────────────────\n`;
-    passes.forEach((c) => {
-      report += `  • ${c.name}\n`;
-    });
-    report += `\n`;
-  }
-
-  // Conclusion
-  report += `CONCLUSION\n`;
-  report += `───────────────────────────────────────────────────────────────\n`;
-  if (result.score >= 85) {
-    report += `  Le site ${hostname} présente un bon niveau de sécurité (${result.grade}).\n`;
-    report += `  Quelques améliorations mineures sont recommandées pour atteindre\n`;
-    report += `  un niveau optimal.\n`;
-  } else if (result.score >= 60) {
-    report += `  Le site ${hostname} présente un niveau de sécurité acceptable (${result.grade})\n`;
-    report += `  mais nécessite des améliorations significatives.\n`;
-    report += `  Priorisez les actions critiques et élevées listées ci-dessus.\n`;
-  } else if (result.score >= 40) {
-    report += `  Le site ${hostname} présente des faiblesses de sécurité importantes (${result.grade}).\n`;
-    report += `  Une intervention rapide est nécessaire pour corriger les\n`;
-    report += `  vulnérabilités critiques et élevées identifiées.\n`;
+    r += `\n`;
   } else {
-    report += `  Le site ${hostname} présente un niveau de sécurité insuffisant (${result.grade}).\n`;
-    report += `  Des actions correctives urgentes sont indispensables.\n`;
-    report += `  Nous recommandons fortement un audit approfondi et un plan\n`;
-    report += `  de remédiation immédiat.\n`;
+    r += `🚨 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES\n`;
+    r += `${line}\n\n`;
+    r += `  ✅ Aucune vulnérabilité critique ou élevée détectée.\n\n`;
   }
 
-  report += `\n───────────────────────────────────────────────────────────────\n`;
-  report += `  Rapport généré par The Webmaster — Security Audit Tool\n`;
-  report += `  https://thewebmaster.pro\n`;
-  report += `═══════════════════════════════════════════════════════════════\n`;
+  // ─── 5. ALERTES DE SÉVÉRITÉ MOYENNE ──────────────────────────
+  const mediumFails = mediums.filter((c) => c.status !== "pass");
+  if (mediumFails.length > 0) {
+    r += `⚠️ 5. ALERTES DE SÉVÉRITÉ MOYENNE\n`;
+    r += `${line}\n`;
+    mediumFails.forEach((c, i) => {
+      r += `\n  ${i + 1}. 🟡 ${c.name}\n`;
+      r += `     ${c.description}\n`;
+      if (c.recommendation) r += `     → ${c.recommendation}\n`;
+    });
+    r += `\n`;
+  } else {
+    r += `⚠️ 5. ALERTES DE SÉVÉRITÉ MOYENNE\n`;
+    r += `${line}\n\n`;
+    r += `  ✅ Aucune alerte de sévérité moyenne.\n\n`;
+  }
 
-  return report;
+  // ─── 6. RECOMMANDATIONS (FAIBLES) ────────────────────────────
+  const lowFails = lows.filter((c) => c.status !== "pass");
+  if (lowFails.length > 0) {
+    r += `💡 6. RECOMMANDATIONS\n`;
+    r += `${line}\n\n`;
+    lowFails.forEach((c, i) => {
+      r += `  ${i + 1}. ${c.name}\n`;
+      r += `     ${c.description}\n`;
+      if (c.recommendation) r += `     → ${c.recommendation}\n\n`;
+    });
+  }
+
+  // ─── 7. INVENTAIRE DÉTAILLÉ PAR CATÉGORIE ────────────────────
+  r += `📋 7. INVENTAIRE DÉTAILLÉ PAR CATÉGORIE\n`;
+  r += `${line}\n`;
+
+  const grouped = result.checks.reduce(
+    (acc, check) => {
+      if (!acc[check.category]) acc[check.category] = [];
+      acc[check.category].push(check);
+      return acc;
+    },
+    {} as Record<string, AuditCheck[]>
+  );
+
+  Object.entries(grouped).forEach(([cat, checks]) => {
+    const catScore = result.categoryScores.find((cs) => cs.category === cat);
+    r += `\n  ■ ${catScore?.label || cat.toUpperCase()}`;
+    if (catScore) r += ` — ${catScore.score}/100 (${catScore.grade})`;
+    r += `\n`;
+
+    checks.forEach((c) => {
+      const icon = c.status === "pass" ? "✅" : c.status === "fail" ? "❌" : c.status === "warn" ? "⚠️" : "ℹ️";
+      r += `    ${icon} ${c.name}`;
+      if (c.status !== "pass" && c.severity && c.severity !== "info") {
+        const sevLabel =
+          c.severity === "critical" ? "[CRITIQUE]" :
+          c.severity === "high" ? "[ÉLEVÉ]" :
+          c.severity === "medium" ? "[MOYEN]" : "[FAIBLE]";
+        r += ` ${sevLabel}`;
+      }
+      r += `\n`;
+    });
+  });
+  r += `\n`;
+
+  // ─── 8. POINTS POSITIFS ──────────────────────────────────────
+  if (passes.length > 0) {
+    r += `✅ 8. POINTS POSITIFS\n`;
+    r += `${line}\n\n`;
+    passes.forEach((c) => {
+      r += `  • ${c.name}\n`;
+    });
+    r += `\n`;
+  }
+
+  // ─── 9. ROADMAP DE REMÉDIATION ───────────────────────────────
+  r += `🎯 9. ROADMAP DE REMÉDIATION\n`;
+  r += `${line}\n\n`;
+
+  const immActions = urgent.filter((c) => c.recommendation);
+  const shortActions = mediumFails.filter((c) => c.recommendation);
+  const longActions = lowFails.filter((c) => c.recommendation);
+
+  if (immActions.length > 0) {
+    r += `  Actions immédiates (0-7 jours) :\n`;
+    immActions.forEach((c, i) => {
+      r += `  ${i + 1}. ${c.recommendation}\n`;
+    });
+    r += `\n`;
+  }
+
+  if (shortActions.length > 0) {
+    r += `  Court terme (1-3 mois) :\n`;
+    shortActions.forEach((c, i) => {
+      r += `  ${i + 1}. ${c.recommendation}\n`;
+    });
+    r += `\n`;
+  }
+
+  if (longActions.length > 0) {
+    r += `  Long terme (3-12 mois) :\n`;
+    longActions.forEach((c, i) => {
+      r += `  ${i + 1}. ${c.recommendation}\n`;
+    });
+    r += `\n`;
+  }
+
+  if (immActions.length === 0 && shortActions.length === 0 && longActions.length === 0) {
+    r += `  ✅ Aucune action corrective majeure nécessaire.\n`;
+    r += `  Maintenir une veille sécurité régulière et planifier des audits périodiques.\n\n`;
+  }
+
+  // ─── 10. CONCLUSION ──────────────────────────────────────────
+  r += `📝 10. CONCLUSION\n`;
+  r += `${line}\n\n`;
+
+  if (result.score >= 85) {
+    r += `  Le site ${hostname} présente un bon niveau de sécurité (${result.grade}, ${result.score}/100).\n`;
+    r += `  Les fondamentaux sont en place. Quelques améliorations mineures\n`;
+    r += `  permettraient d'atteindre un niveau optimal.\n\n`;
+    r += `  Recommandation : Maintenir le niveau actuel avec des audits\n`;
+    r += `  trimestriels et une veille sur les nouvelles vulnérabilités.\n`;
+  } else if (result.score >= 60) {
+    r += `  Le site ${hostname} présente un niveau de sécurité acceptable\n`;
+    r += `  (${result.grade}, ${result.score}/100) mais nécessite des améliorations significatives.\n\n`;
+    r += `  Recommandation : Priorisez les corrections critiques et élevées\n`;
+    r += `  dans les 7 prochains jours, puis traitez les alertes moyennes\n`;
+    r += `  dans le mois suivant.\n`;
+  } else if (result.score >= 40) {
+    r += `  Le site ${hostname} présente des faiblesses de sécurité importantes\n`;
+    r += `  (${result.grade}, ${result.score}/100). Une intervention rapide est nécessaire.\n\n`;
+    r += `  Recommandation : Mobilisez une équipe technique pour corriger\n`;
+    r += `  les vulnérabilités critiques dans les 24-48h. Un plan de\n`;
+    r += `  remédiation complet doit être mis en place immédiatement.\n`;
+  } else {
+    r += `  Le site ${hostname} présente un niveau de sécurité insuffisant\n`;
+    r += `  (${result.grade}, ${result.score}/100). Des risques majeurs ont été identifiés.\n\n`;
+    r += `  Recommandation : URGENCE — Stoppez toute mise en production.\n`;
+    r += `  Les vulnérabilités critiques doivent être corrigées AVANT toute\n`;
+    r += `  exposition publique. Un audit approfondi par un professionnel\n`;
+    r += `  de la cybersécurité est fortement recommandé.\n`;
+  }
+
+  r += `\n`;
+  r += `${doubleLine}\n`;
+  r += `  Rapport généré par The Webmaster — Security Audit Tool v2.0\n`;
+  r += `  https://thewebmaster.pro/fr/security-audit\n`;
+  r += `  ${date}, ${time}\n`;
+  r += `${doubleLine}\n`;
+
+  return r;
 }
 
 function AuditReport({ result }: { result: AuditResult }) {

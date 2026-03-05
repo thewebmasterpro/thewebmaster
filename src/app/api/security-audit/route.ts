@@ -16,12 +16,25 @@ interface AuditCheck {
   recommendation?: string;
 }
 
+interface CategoryScore {
+  category: string;
+  label: string;
+  score: number;
+  grade: string;
+  total: number;
+  passed: number;
+  warned: number;
+  failed: number;
+}
+
 interface AuditResult {
   url: string;
   timestamp: string;
   score: number;
   grade: string;
+  status: "production-ready" | "needs-fixes" | "at-risk" | "critical";
   checks: AuditCheck[];
+  categoryScores: CategoryScore[];
   responseTime: number;
   tlsInfo: { secure: boolean };
   technologies: string[];
@@ -1361,7 +1374,20 @@ function checkPerformance(headers: Headers, html: string, responseTime: number):
 // SCORE CALCULATION
 // =============================================================================
 
-function calculateScore(checks: AuditCheck[]): { score: number; grade: string } {
+const categoryLabelMap: Record<string, string> = {
+  ssl: "SSL / HTTPS",
+  headers: "En-têtes de sécurité",
+  "info-leak": "Fuite d'information",
+  cookies: "Cookies",
+  owasp: "OWASP — Vulnérabilités",
+  xss: "Protection XSS & CSRF",
+  infra: "Infrastructure & DNS",
+  rgpd: "RGPD / Compliance",
+  incident: "Monitoring & Réponse",
+  performance: "Performance",
+};
+
+function scoreFromChecks(checks: AuditCheck[]): { score: number; grade: string } {
   const scorable = checks.filter((c) => c.status !== "info");
   if (scorable.length === 0) return { score: 100, grade: "A+" };
 
@@ -1369,7 +1395,6 @@ function calculateScore(checks: AuditCheck[]): { score: number; grade: string } 
   for (const c of scorable) {
     if (c.status === "pass") total += 1;
     else if (c.status === "warn") total += 0.4;
-    // fail = 0
   }
 
   const score = Math.round((total / scorable.length) * 100);
@@ -1382,6 +1407,45 @@ function calculateScore(checks: AuditCheck[]): { score: number; grade: string } 
   else if (score >= 40) grade = "D";
 
   return { score, grade };
+}
+
+function calculateScore(checks: AuditCheck[]): {
+  score: number;
+  grade: string;
+  status: "production-ready" | "needs-fixes" | "at-risk" | "critical";
+  categoryScores: CategoryScore[];
+} {
+  const { score, grade } = scoreFromChecks(checks);
+
+  // Category scores
+  const categories = [...new Set(checks.map((c) => c.category))];
+  const categoryScores: CategoryScore[] = categories
+    .filter((cat) => categoryLabelMap[cat])
+    .map((cat) => {
+      const catChecks = checks.filter((c) => c.category === cat);
+      const scorable = catChecks.filter((c) => c.status !== "info");
+      const { score: catScore, grade: catGrade } = scoreFromChecks(catChecks);
+      return {
+        category: cat,
+        label: categoryLabelMap[cat] || cat,
+        score: catScore,
+        grade: catGrade,
+        total: scorable.length,
+        passed: scorable.filter((c) => c.status === "pass").length,
+        warned: scorable.filter((c) => c.status === "warn").length,
+        failed: scorable.filter((c) => c.status === "fail").length,
+      };
+    });
+
+  // Overall status
+  const hasCritical = checks.some((c) => c.severity === "critical" && c.status === "fail");
+  const hasHigh = checks.some((c) => c.severity === "high" && c.status === "fail");
+  let status: "production-ready" | "needs-fixes" | "at-risk" | "critical" = "production-ready";
+  if (hasCritical) status = "critical";
+  else if (hasHigh) status = "at-risk";
+  else if (score < 75) status = "needs-fixes";
+
+  return { score, grade, status, categoryScores };
 }
 
 // =============================================================================
@@ -1454,14 +1518,16 @@ export async function POST(request: NextRequest) {
     ];
 
     const technologies = detectTechnologies(headers, html);
-    const { score, grade } = calculateScore(allChecks);
+    const { score, grade, status, categoryScores } = calculateScore(allChecks);
 
     const result: AuditResult = {
       url: targetUrl,
       timestamp: new Date().toISOString(),
       score,
       grade,
+      status,
       checks: allChecks,
+      categoryScores,
       responseTime,
       tlsInfo: { secure: isHttps },
       technologies,
