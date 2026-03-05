@@ -1,5 +1,4 @@
 import { headers } from "next/headers";
-import Script from "next/script";
 import { fontVariables } from "@/lib/fonts";
 import { organizationJsonLd, websiteJsonLd } from "@/lib/jsonld";
 import { JsonLd } from "@/components/seo/JsonLd";
@@ -23,10 +22,6 @@ export default async function RootLayout({
         <link rel="dns-prefetch" href="https://www.instagram.com" />
         <link rel="dns-prefetch" href="https://www.linkedin.com" />
         <JsonLd data={[organizationJsonLd(), websiteJsonLd()]} />
-        <Script
-          src={`https://www.google.com/recaptcha/api.js?render=${process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY}`}
-          strategy="afterInteractive"
-        />
       </head>
       <body className={`${fontVariables} antialiased`}>
         <Providers>

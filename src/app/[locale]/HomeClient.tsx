@@ -156,12 +156,14 @@ function HeroSection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-king-gold.png"
+            src="/images/hero-chess-king-gold.webp"
             alt={d.hero.heroImageAlt}
             fill
             className="object-cover object-center"
             priority
-            quality={90}
+            quality={75}
+            sizes="100vw"
+            fetchPriority="high"
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-gradient-to-b from-background/70 via-background/50 to-background" />
@@ -253,10 +255,12 @@ function ServicesSection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.4} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-knight-wireframe.png"
+            src="/images/hero-chess-knight-wireframe.webp"
             alt="Background décoratif services"
             fill
             className="object-cover opacity-[0.18]"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/70" />
@@ -321,10 +325,12 @@ function SOSSection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.35} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-queen-dark.png"
+            src="/images/hero-chess-queen-dark.webp"
             alt="Background décoratif dépannage"
             fill
             className="object-cover opacity-[0.2]"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/65" />
@@ -459,10 +465,12 @@ function ProcessSection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.35} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-piece-network.png"
+            src="/images/hero-chess-piece-network.webp"
             alt="Background décoratif processus"
             fill
             className="object-cover opacity-[0.18]"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/70" />
@@ -519,10 +527,12 @@ function AboutSection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-knight-particles.png"
+            src="/images/hero-chess-knight-particles.webp"
             alt="Background décoratif à propos"
             fill
             className="object-cover opacity-[0.15]"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/70" />
@@ -537,10 +547,12 @@ function AboutSection({ d }: { d: Dictionary }) {
               className="relative aspect-[4/3] rounded-2xl overflow-hidden"
             >
               <Image
-                src="/images/hero-chess-knight-close.png"
+                src="/images/hero-chess-knight-close.webp"
                 alt={d.about.imageAlt}
                 fill
                 className="object-cover"
+                loading="lazy"
+                quality={75}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-background/40 to-transparent" />
             </ParallaxScroll>
@@ -634,10 +646,12 @@ function FAQSectionBlock({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-pawn-liquid.png"
+            src="/images/hero-chess-pawn-liquid.webp"
             alt="Background décoratif FAQ"
             fill
             className="object-cover opacity-[0.15]"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/70" />
@@ -705,7 +719,19 @@ function CTASection({ d }: { d: Dictionary }) {
     try {
       const siteKey = process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY;
       let recaptchaToken = "";
-      if (siteKey && window.grecaptcha) {
+      if (siteKey) {
+        // Load reCAPTCHA on-demand (not globally) for better performance
+        if (!window.grecaptcha) {
+          await new Promise<void>((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
+            script.onload = () => {
+              window.grecaptcha.ready(() => resolve());
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
+          });
+        }
         recaptchaToken = await window.grecaptcha.execute(siteKey, {
           action: "contact",
         });
@@ -730,10 +756,12 @@ function CTASection({ d }: { d: Dictionary }) {
       <div className="absolute inset-0 -z-10">
         <ParallaxScroll speed={0.2} className="absolute inset-0">
           <Image
-            src="/images/hero-chess-pawn-data.png"
+            src="/images/hero-chess-pawn-data.webp"
             alt="Background décoratif contact"
             fill
             className="object-cover"
+            loading="lazy"
+            quality={60}
           />
         </ParallaxScroll>
         <div className="absolute inset-0 bg-background/85 backdrop-blur-sm" />
