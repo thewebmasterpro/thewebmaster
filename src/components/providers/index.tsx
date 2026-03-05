@@ -3,6 +3,7 @@
 import { ReactNode } from "react";
 import { ThemeProvider } from "./ThemeProvider";
 import { Toaster } from "@/components/ui/Toast";
+import { CookieConsent } from "@/components/blocks/CookieConsent";
 
 // =============================================================================
 // PROVIDERS
@@ -21,6 +22,7 @@ export function Providers({ children }: ProvidersProps) {
       {/* <SessionProvider> */}
       {children}
       <Toaster />
+      <CookieConsent />
       {/* </SessionProvider> */}
       {/* </QueryClientProvider> */}
     </ThemeProvider>

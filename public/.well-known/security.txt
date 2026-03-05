@@ -1,0 +1,4 @@
+Contact: mailto:contact@thewebmaster.pro
+Expires: 2027-03-05T00:00:00.000Z
+Preferred-Languages: fr, nl, en
+Canonical: https://thewebmaster.pro/.well-known/security.txt

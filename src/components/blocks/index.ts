@@ -4,6 +4,7 @@
 
 // Header
 export { Navbar } from "./Navbar";
+export { CookieConsent } from "./CookieConsent";
 
 // Hero & CTA
 export { HeroSimple } from "./HeroSimple";

@@ -32,24 +32,40 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
   },
-  // HSTS - Force HTTPS (uncomment in production with HTTPS)
-  // {
-  //   key: "Strict-Transport-Security",
-  //   value: "max-age=31536000; includeSubDomains; preload",
-  // },
-  // Content Security Policy (customize based on your needs)
-  // {
-  //   key: "Content-Security-Policy",
-  //   value: `
-  //     default-src 'self';
-  //     script-src 'self' 'unsafe-eval' 'unsafe-inline';
-  //     style-src 'self' 'unsafe-inline';
-  //     img-src 'self' data: https:;
-  //     font-src 'self';
-  //     connect-src 'self' https:;
-  //     frame-ancestors 'none';
-  //   `.replace(/\n/g, ""),
-  // },
+  // HSTS - Force HTTPS
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=31536000; includeSubDomains; preload",
+  },
+  // Content Security Policy
+  {
+    key: "Content-Security-Policy",
+    value: [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://analytics.hagendigital.com https://www.google.com https://www.gstatic.com",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self'",
+      "connect-src 'self' https://analytics.hagendigital.com https://www.google.com",
+      "frame-src https://www.google.com",
+      "frame-ancestors 'none'",
+    ].join("; "),
+  },
+  // Cross-Origin-Opener-Policy
+  {
+    key: "Cross-Origin-Opener-Policy",
+    value: "same-origin",
+  },
+  // Cross-Origin-Resource-Policy
+  {
+    key: "Cross-Origin-Resource-Policy",
+    value: "same-origin",
+  },
+  // Cross-Origin-Embedder-Policy
+  {
+    key: "Cross-Origin-Embedder-Policy",
+    value: "require-corp",
+  },
 ];
 
 const nextConfig: NextConfig = {
