@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import Script from "next/script";
 import { fontVariables } from "@/lib/fonts";
 import { organizationJsonLd, websiteJsonLd } from "@/lib/jsonld";
@@ -5,13 +6,16 @@ import { JsonLd } from "@/components/seo/JsonLd";
 import { Providers } from "@/components/providers";
 import "./globals.css";
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const headersList = await headers();
+  const locale = headersList.get("x-locale") || "fr";
+
   return (
-    <html lang="fr" suppressHydrationWarning>
+    <html lang={locale} suppressHydrationWarning>
       <head>
         <JsonLd data={[organizationJsonLd(), websiteJsonLd()]} />
         <Script

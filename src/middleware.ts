@@ -34,7 +34,10 @@ export function middleware(request: NextRequest) {
   );
 
   if (pathnameHasLocale) {
-    return NextResponse.next();
+    const locale = pathname.split("/")[1];
+    const response = NextResponse.next();
+    response.headers.set("x-locale", locale);
+    return response;
   }
 
   // Determine locale
