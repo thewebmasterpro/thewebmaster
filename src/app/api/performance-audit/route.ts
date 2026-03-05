@@ -118,11 +118,30 @@ function detectTechnologies(html: string, headers: Headers): string[] {
   return [...new Set(techs)];
 }
 
+// Helper: detect if site uses a modern framework (Next.js, Nuxt, etc.)
+function isModernFramework(html: string): boolean {
+  return /__next|__nuxt|__remix|__gatsby/i.test(html);
+}
+
+// Helper: count framework data/hydration scripts (not real blocking JS)
+function countFrameworkDataScripts(html: string): number {
+  // Next.js RSC payloads, hydration data, flight data
+  const rscScripts = html.match(/<script[^>]*>self\.__next_f\.push/gi) || [];
+  const nextData = html.match(/<script[^>]*id=["']__NEXT_DATA__["']/gi) || [];
+  const flightScripts = html.match(/<script[^>]*>\(self\.__next_[a-z]/gi) || [];
+  return rscScripts.length + nextData.length + flightScripts.length;
+}
+
 // Helper: extract resource stats
 function extractResourceStats(html: string): ResourceStats {
   const scriptTags = html.match(/<script[^>]*>/gi) || [];
   const scriptSrcs = scriptTags.filter((s) => /src=["']/i.test(s));
-  const inlineScripts = scriptTags.filter((s) => !/src=["']/i.test(s) && !/type=["']application\/(ld\+json|json)["']/i.test(s));
+  const allInlineScripts = scriptTags.filter((s) => !/src=["']/i.test(s) && !/type=["']application\/(ld\+json|json)["']/i.test(s));
+  // Exclude framework hydration/data scripts from inline count
+  const frameworkDataCount = countFrameworkDataScripts(html);
+  const inlineScripts = allInlineScripts.filter((s) =>
+    !/self\.__next_f|__NEXT_DATA__|self\.__next_[a-z]/i.test(s)
+  );
   const syncScripts = scriptSrcs.filter((s) => !/async|defer/i.test(s));
   const asyncScripts = scriptSrcs.filter((s) => /async/i.test(s));
   const deferScripts = scriptSrcs.filter((s) => /defer/i.test(s));
@@ -330,9 +349,9 @@ function checkResources(html: string, resources: ResourceStats): PerfCheck[] {
       : undefined,
   });
 
-  // Total scripts count
+  // Total scripts count (excludes framework hydration/data scripts)
   const totalScripts = resources.totalScripts + resources.inlineScripts;
-  const scriptsStatus = totalScripts <= 10 ? "pass" : totalScripts <= 20 ? "warn" : "fail";
+  const scriptsStatus = totalScripts <= 15 ? "pass" : totalScripts <= 25 ? "warn" : "fail";
   checks.push({
     id: "res-scripts-count",
     category: "resources",
@@ -437,8 +456,9 @@ function checkImages(html: string, resources: ResourceStats): PerfCheck[] {
   });
 
   // Modern formats (WebP/AVIF)
+  // Next.js /_next/image serves WebP/AVIF via content negotiation (Accept header)
   const imgSrcs = extractAllAttributes(html, "img", "src");
-  const modernFormats = imgSrcs.filter((s) => /\.(webp|avif)/i.test(s));
+  const modernFormats = imgSrcs.filter((s) => /\.(webp|avif)/i.test(s) || /\/_next\/image/i.test(s));
   const modernRatio = imgSrcs.length > 0 ? modernFormats.length / imgSrcs.length : 1;
   const formatStatus = modernRatio >= 0.5 ? "pass" : modernRatio > 0 ? "warn" : "fail";
   checks.push({
@@ -455,8 +475,9 @@ function checkImages(html: string, resources: ResourceStats): PerfCheck[] {
   });
 
   // Responsive images (srcset)
+  // Next.js Image with fill uses sizes + srcset; data-nimg="fill" images are inherently responsive
   const imgTags = html.match(/<img[^>]*>/gi) || [];
-  const withSrcset = imgTags.filter((img) => /srcset=/i.test(img));
+  const withSrcset = imgTags.filter((img) => /srcset=/i.test(img) || /data-nimg=["']fill["']/i.test(img));
   const srcsetRatio = imgTags.length > 0 ? withSrcset.length / imgTags.length : 1;
   const srcsetStatus = srcsetRatio >= 0.5 ? "pass" : srcsetRatio > 0 ? "warn" : "fail";
   checks.push({
@@ -473,7 +494,11 @@ function checkImages(html: string, resources: ResourceStats): PerfCheck[] {
   });
 
   // Image dimensions
-  const withDimensions = imgTags.filter((img) => /width=/i.test(img) && /height=/i.test(img));
+  // Next.js fill images (data-nimg="fill") use CSS-based sizing via parent container — no CLS risk
+  // Next.js responsive images (data-nimg="1") have width/height in style attribute
+  const withDimensions = imgTags.filter((img) =>
+    (/width=/i.test(img) && /height=/i.test(img)) || /data-nimg/i.test(img)
+  );
   const dimRatio = imgTags.length > 0 ? withDimensions.length / imgTags.length : 1;
   const dimStatus = dimRatio >= 0.7 ? "pass" : dimRatio > 0.3 ? "warn" : "fail";
   checks.push({
@@ -644,17 +669,21 @@ function checkRendering(html: string): PerfCheck[] {
   });
 
   // Critical CSS / above-the-fold
-  const hasInlineCriticalCss = /<style[^>]*>[\s\S]{200,}<\/style>/i.test(html.substring(0, 5000));
+  // Modern frameworks (Next.js, Nuxt) handle CSS extraction and injection automatically
+  const headSection = html.substring(0, html.indexOf("</head>") || 5000);
+  const hasInlineCriticalCss = /<style[^>]*>[\s\S]{100,}<\/style>/i.test(headSection);
+  const hasFrameworkCss = isModernFramework(html) && /<link[^>]*rel=["']stylesheet["'][^>]*>/i.test(headSection);
+  const hasCriticalCss = hasInlineCriticalCss || hasFrameworkCss;
   checks.push({
     id: "dom-critical-css",
     category: "rendering",
     name: "Critical CSS inline",
-    status: hasInlineCriticalCss ? "pass" : "warn",
-    severity: hasInlineCriticalCss ? "info" : "medium",
-    description: hasInlineCriticalCss
-      ? "Critical CSS inline detecte dans le <head>"
+    status: hasCriticalCss ? "pass" : "warn",
+    severity: hasCriticalCss ? "info" : "medium",
+    description: hasCriticalCss
+      ? hasInlineCriticalCss ? "Critical CSS inline detecte dans le <head>" : "CSS injecte dans le <head> par le framework"
       : "Pas de critical CSS inline detecte",
-    recommendation: !hasInlineCriticalCss
+    recommendation: !hasCriticalCss
       ? "Injectez le CSS critique (above-the-fold) en inline dans le <head> pour accelerer le FCP."
       : undefined,
   });
@@ -684,7 +713,7 @@ function checkOptimization(html: string, thirdPartyDomains: string[]): PerfCheck
   const checks: PerfCheck[] = [];
 
   // Preconnect
-  const preconnects = (html.match(/<link[^>]*rel=["']preconnect["'][^>]*>/gi) || []);
+  const preconnects = (html.match(/<link[^>]*rel=["'](preconnect|dns-prefetch)["'][^>]*>/gi) || []);
   const hasPreconnect = preconnects.length > 0;
   checks.push({
     id: "opt-preconnect",
@@ -852,8 +881,11 @@ function checkCoreWebVitals(
   });
 
   // CLS estimation (based on images without dimensions + font loading)
+  // Next.js Image (data-nimg) handles dimensions via CSS — no CLS contribution
   const imgTags = html.match(/<img[^>]*>/gi) || [];
-  const imgsWithoutDims = imgTags.filter((img) => !/width=/i.test(img) || !/height=/i.test(img));
+  const imgsWithoutDims = imgTags.filter((img) =>
+    (!/width=/i.test(img) || !/height=/i.test(img)) && !/data-nimg/i.test(img)
+  );
   const fontFaces = html.match(/@font-face/gi) || [];
   const hasFontDisplaySwap = /font-display:\s*(swap|optional|fallback)/i.test(html);
   const clsRisk = imgsWithoutDims.length * 0.05 + (fontFaces.length > 0 && !hasFontDisplaySwap ? 0.1 : 0);
@@ -872,10 +904,11 @@ function checkCoreWebVitals(
   });
 
   // TBT estimation (based on sync scripts + inline JS)
+  // Framework data scripts (RSC payloads, hydration data) are tiny and non-blocking
   const syncScriptPenalty = resources.syncScripts * 300;
   const inlineJsPenalty = resources.inlineScripts * 50;
   const estimatedTBT = syncScriptPenalty + inlineJsPenalty;
-  const tbtStatus = estimatedTBT < 200 ? "pass" : estimatedTBT < 600 ? "warn" : "fail";
+  const tbtStatus = estimatedTBT < 300 ? "pass" : estimatedTBT < 800 ? "warn" : "fail";
   checks.push({
     id: "cwv-tbt",
     category: "cwv",

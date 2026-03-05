@@ -17,13 +17,12 @@ export default async function RootLayout({
   return (
     <html lang={locale} suppressHydrationWarning>
       <head>
+        <link rel="preconnect" href="https://analytics.hagendigital.com" />
+        <link rel="dns-prefetch" href="https://www.google.com" />
+        <link rel="dns-prefetch" href="https://www.facebook.com" />
+        <link rel="dns-prefetch" href="https://www.instagram.com" />
+        <link rel="dns-prefetch" href="https://www.linkedin.com" />
         <JsonLd data={[organizationJsonLd(), websiteJsonLd()]} />
-        <Script
-          defer
-          src="https://analytics.hagendigital.com/script.js"
-          data-website-id="f8bfa504-b4d8-4b3a-b40f-45fe1aa76f81"
-          strategy="afterInteractive"
-        />
         <Script
           src={`https://www.google.com/recaptcha/api.js?render=${process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY}`}
           strategy="afterInteractive"
