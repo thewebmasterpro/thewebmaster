@@ -27,6 +27,9 @@ import {
   Siren,
   Network,
   Gauge,
+  FileText,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -193,6 +196,174 @@ function CheckCard({ check }: { check: AuditCheck }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// =============================================================================
+// AUTO-GENERATED REPORT
+// =============================================================================
+
+function generateReportText(result: AuditResult): string {
+  const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+  const hostname = new URL(result.url).hostname;
+
+  const criticals = result.checks.filter((c) => c.severity === "critical");
+  const highs = result.checks.filter((c) => c.severity === "high");
+  const mediums = result.checks.filter((c) => c.severity === "medium");
+  const lows = result.checks.filter((c) => c.severity === "low");
+  const passes = result.checks.filter((c) => c.status === "pass");
+  const fails = result.checks.filter((c) => c.status === "fail");
+  const warns = result.checks.filter((c) => c.status === "warn");
+
+  let report = `═══════════════════════════════════════════════════════════════\n`;
+  report += `  RAPPORT D'AUDIT DE SÉCURITÉ — ${hostname.toUpperCase()}\n`;
+  report += `  Date : ${date}  |  Score : ${result.score}/100 (${result.grade})\n`;
+  report += `  Temps de réponse : ${result.responseTime}ms  |  HTTPS : ${result.tlsInfo.secure ? "Oui" : "Non"}\n`;
+  report += `═══════════════════════════════════════════════════════════════\n\n`;
+
+  // Summary
+  report += `RÉSUMÉ\n`;
+  report += `───────────────────────────────────────────────────────────────\n`;
+  report += `  ${result.checks.length} vérifications effectuées\n`;
+  report += `  ✅ ${passes.length} réussi(es)  |  ⚠️ ${warns.length} alerte(s)  |  ❌ ${fails.length} échec(s)\n`;
+  if (criticals.length > 0) report += `  🔴 ${criticals.length} vulnérabilité(s) CRITIQUE(S)\n`;
+  if (highs.length > 0) report += `  🟠 ${highs.length} vulnérabilité(s) de sévérité ÉLEVÉE\n`;
+  if (mediums.length > 0) report += `  🟡 ${mediums.length} point(s) de sévérité MOYENNE\n`;
+  if (lows.length > 0) report += `  🔵 ${lows.length} point(s) de sévérité FAIBLE\n`;
+  report += `\n`;
+
+  // Technologies
+  if (result.technologies.length > 0) {
+    report += `TECHNOLOGIES DÉTECTÉES\n`;
+    report += `───────────────────────────────────────────────────────────────\n`;
+    report += `  ${result.technologies.join(", ")}\n\n`;
+  }
+
+  // Critical & High — Actions immédiates
+  const urgent = [...criticals, ...highs];
+  if (urgent.length > 0) {
+    report += `🚨 ACTIONS IMMÉDIATES REQUISES\n`;
+    report += `───────────────────────────────────────────────────────────────\n`;
+    urgent.forEach((c, i) => {
+      const sev = c.severity === "critical" ? "CRITIQUE" : "ÉLEVÉ";
+      report += `\n  ${i + 1}. [${sev}] ${c.name}\n`;
+      report += `     Problème : ${c.description}\n`;
+      if (c.value) report += `     Valeur : ${c.value}\n`;
+      if (c.recommendation) report += `     → Action : ${c.recommendation}\n`;
+    });
+    report += `\n`;
+  }
+
+  // Medium — Améliorations importantes
+  if (mediums.length > 0) {
+    report += `⚠️ AMÉLIORATIONS IMPORTANTES\n`;
+    report += `───────────────────────────────────────────────────────────────\n`;
+    mediums.forEach((c, i) => {
+      report += `\n  ${i + 1}. ${c.name}\n`;
+      report += `     ${c.description}\n`;
+      if (c.recommendation) report += `     → ${c.recommendation}\n`;
+    });
+    report += `\n`;
+  }
+
+  // Low — Recommandations
+  if (lows.length > 0) {
+    report += `💡 RECOMMANDATIONS\n`;
+    report += `───────────────────────────────────────────────────────────────\n`;
+    lows.forEach((c, i) => {
+      report += `  ${i + 1}. ${c.name} — ${c.description}`;
+      if (c.recommendation) report += ` → ${c.recommendation}`;
+      report += `\n`;
+    });
+    report += `\n`;
+  }
+
+  // Points positifs
+  if (passes.length > 0) {
+    report += `✅ POINTS POSITIFS\n`;
+    report += `───────────────────────────────────────────────────────────────\n`;
+    passes.forEach((c) => {
+      report += `  • ${c.name}\n`;
+    });
+    report += `\n`;
+  }
+
+  // Conclusion
+  report += `CONCLUSION\n`;
+  report += `───────────────────────────────────────────────────────────────\n`;
+  if (result.score >= 85) {
+    report += `  Le site ${hostname} présente un bon niveau de sécurité (${result.grade}).\n`;
+    report += `  Quelques améliorations mineures sont recommandées pour atteindre\n`;
+    report += `  un niveau optimal.\n`;
+  } else if (result.score >= 60) {
+    report += `  Le site ${hostname} présente un niveau de sécurité acceptable (${result.grade})\n`;
+    report += `  mais nécessite des améliorations significatives.\n`;
+    report += `  Priorisez les actions critiques et élevées listées ci-dessus.\n`;
+  } else if (result.score >= 40) {
+    report += `  Le site ${hostname} présente des faiblesses de sécurité importantes (${result.grade}).\n`;
+    report += `  Une intervention rapide est nécessaire pour corriger les\n`;
+    report += `  vulnérabilités critiques et élevées identifiées.\n`;
+  } else {
+    report += `  Le site ${hostname} présente un niveau de sécurité insuffisant (${result.grade}).\n`;
+    report += `  Des actions correctives urgentes sont indispensables.\n`;
+    report += `  Nous recommandons fortement un audit approfondi et un plan\n`;
+    report += `  de remédiation immédiat.\n`;
+  }
+
+  report += `\n───────────────────────────────────────────────────────────────\n`;
+  report += `  Rapport généré par The Webmaster — Security Audit Tool\n`;
+  report += `  https://thewebmaster.pro\n`;
+  report += `═══════════════════════════════════════════════════════════════\n`;
+
+  return report;
+}
+
+function AuditReport({ result }: { result: AuditResult }) {
+  const [copied, setCopied] = useState(false);
+  const report = generateReportText(result);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(report);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="rounded-2xl border border-primary/20 bg-card/50 overflow-hidden">
+      <div className="flex items-center justify-between p-5 border-b border-border/50">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+            <FileText className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold">Rapport d&apos;audit</h3>
+            <p className="text-xs text-muted-foreground">
+              Synthèse des résultats et plan d&apos;action
+            </p>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2">
+          {copied ? (
+            <>
+              <Check className="w-4 h-4 text-green-500" />
+              Copié
+            </>
+          ) : (
+            <>
+              <Copy className="w-4 h-4" />
+              Copier
+            </>
+          )}
+        </Button>
+      </div>
+      <pre className="p-5 text-xs leading-relaxed text-foreground/90 overflow-x-auto whitespace-pre-wrap font-mono bg-muted/20 max-h-[600px] overflow-y-auto">
+        {report}
+      </pre>
     </div>
   );
 }
@@ -408,6 +579,9 @@ export default function SecurityAuditClient() {
                   </div>
                 );
               })}
+
+            {/* Auto-generated Report */}
+            <AuditReport result={result} />
 
             {/* Disclaimer */}
             <div className="p-4 rounded-xl border border-border/30 bg-muted/20 text-center">
