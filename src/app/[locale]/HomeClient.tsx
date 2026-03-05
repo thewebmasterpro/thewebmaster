@@ -183,7 +183,7 @@ function HeroSection({ d }: { d: Dictionary }) {
             </MagneticHover>
           </FadeIn>
 
-          <div className="mb-6">
+          <h1 className="mb-6">
             <SplitWords
               as="span"
               staggerDelay={0.08}
@@ -197,7 +197,7 @@ function HeroSection({ d }: { d: Dictionary }) {
                 {d.hero.title2}
               </span>
             </FadeIn>
-          </div>
+          </h1>
 
           <ScrollReveal animation="blur" delay={1.0} duration={0.8}>
             <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mb-10 leading-relaxed">
@@ -254,7 +254,7 @@ function ServicesSection({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.4} className="absolute inset-0">
           <Image
             src="/images/hero-chess-knight-wireframe.png"
-            alt=""
+            alt="Background décoratif services"
             fill
             className="object-cover opacity-[0.18]"
           />
@@ -322,7 +322,7 @@ function SOSSection({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.35} className="absolute inset-0">
           <Image
             src="/images/hero-chess-queen-dark.png"
-            alt=""
+            alt="Background décoratif dépannage"
             fill
             className="object-cover opacity-[0.2]"
           />
@@ -460,7 +460,7 @@ function ProcessSection({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.35} className="absolute inset-0">
           <Image
             src="/images/hero-chess-piece-network.png"
-            alt=""
+            alt="Background décoratif processus"
             fill
             className="object-cover opacity-[0.18]"
           />
@@ -520,7 +520,7 @@ function AboutSection({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
             src="/images/hero-chess-knight-particles.png"
-            alt=""
+            alt="Background décoratif à propos"
             fill
             className="object-cover opacity-[0.15]"
           />
@@ -635,7 +635,7 @@ function FAQSectionBlock({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.3} className="absolute inset-0">
           <Image
             src="/images/hero-chess-pawn-liquid.png"
-            alt=""
+            alt="Background décoratif FAQ"
             fill
             className="object-cover opacity-[0.15]"
           />
@@ -731,7 +731,7 @@ function CTASection({ d }: { d: Dictionary }) {
         <ParallaxScroll speed={0.2} className="absolute inset-0">
           <Image
             src="/images/hero-chess-pawn-data.png"
-            alt=""
+            alt="Background décoratif contact"
             fill
             className="object-cover"
           />

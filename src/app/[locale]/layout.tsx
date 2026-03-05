@@ -17,7 +17,7 @@ const seoTitles: Record<string, string> = {
 };
 
 const seoDescriptions: Record<string, string> = {
-  fr: "Agence digitale belge spécialisée en création de sites web, design graphique, réseaux sociaux et publicité digitale. Transformez et propulsez votre business en ligne.",
+  fr: "Agence digitale belge spécialisée en création de sites web, design graphique, réseaux sociaux et publicité digitale. Propulsez votre business en ligne.",
   nl: "Belgisch digitaal bureau gespecialiseerd in webdesign, grafisch ontwerp, sociale media en digitale reclame. Transformeer en lanceer uw online business.",
   en: "Belgian digital agency specialising in web design, graphic design, social media and digital advertising. Transform and propel your online business.",
 };
