@@ -891,15 +891,24 @@ function checkRGPD(html: string, baseUrl: string): AuditCheck[] {
   const checks: AuditCheck[] = [];
   const lower = html.toLowerCase();
 
-  // Privacy policy detection
+  // Privacy policy detection — check text, links and href attributes
   const hasPrivacyLink =
     lower.includes("privacy") ||
     lower.includes("vie privée") ||
-    lower.includes("politique de confidentialité") ||
+    lower.includes("confidentialité") ||
+    lower.includes("confidentialite") ||
+    lower.includes("données personnelles") ||
+    lower.includes("donnees personnelles") ||
+    lower.includes("protection des données") ||
+    lower.includes("protection des donnees") ||
     lower.includes("privacybeleid") ||
+    lower.includes("gegevensbescherming") ||
     lower.includes("datenschutz") ||
     lower.includes("rgpd") ||
-    lower.includes("gdpr");
+    lower.includes("gdpr") ||
+    /href="[^"]*privac/i.test(html) ||
+    /href="[^"]*confidentialite/i.test(html) ||
+    /href="[^"]*donnees-personnelles/i.test(html);
 
   checks.push({
     id: "rgpd-privacy",
@@ -918,9 +927,13 @@ function checkRGPD(html: string, baseUrl: string): AuditCheck[] {
   // Legal notice
   const hasLegal =
     lower.includes("mentions légales") ||
+    lower.includes("mentions legales") ||
     lower.includes("legal notice") ||
+    lower.includes("legal-notice") ||
     lower.includes("impressum") ||
-    lower.includes("wettelijke vermeldingen");
+    lower.includes("wettelijke vermeldingen") ||
+    /href="[^"]*mentions-legales/i.test(html) ||
+    /href="[^"]*legal/i.test(html);
 
   checks.push({
     id: "rgpd-legal",
