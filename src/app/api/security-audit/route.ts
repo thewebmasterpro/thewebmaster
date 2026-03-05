@@ -430,47 +430,69 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
   const origin = new URL(baseUrl).origin;
 
   // Sensitive paths to probe
+  // contentCheck: regex to verify the response body actually matches the expected content
+  // This prevents false positives from frameworks returning 200 with custom 404 pages
   const sensitivePaths = [
-    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)" },
-    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git" },
-    { path: "/wp-admin/", name: "WordPress Admin", severity: "high" as const, desc: "Interface d'administration WordPress" },
-    { path: "/wp-login.php", name: "WordPress Login", severity: "medium" as const, desc: "Page de connexion WordPress" },
-    { path: "/xmlrpc.php", name: "WordPress XML-RPC", severity: "high" as const, desc: "API XML-RPC (vecteur de brute-force)" },
-    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données" },
-    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données" },
-    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache" },
-    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée" },
-    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache" },
-    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET" },
-    { path: "/robots.txt", name: "robots.txt", severity: "info" as const, desc: "Directives pour les moteurs de recherche" },
-    { path: "/sitemap.xml", name: "sitemap.xml", severity: "info" as const, desc: "Plan du site pour les moteurs de recherche" },
-    { path: "/backup.zip", name: "Fichier de sauvegarde", severity: "critical" as const, desc: "Archive de sauvegarde exposée" },
-    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé" },
-    { path: "/debug", name: "Page de debug", severity: "high" as const, desc: "Interface de débogage" },
-    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP" },
-    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées" },
-    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "medium" as const, desc: "Métadonnées macOS (structure de répertoire)" },
-    { path: "/wp-json/wp/v2/users", name: "WordPress REST API Users", severity: "high" as const, desc: "Énumération des utilisateurs WordPress" },
-    { path: "/api/", name: "Répertoire API", severity: "info" as const, desc: "Point d'entrée API détecté" },
+    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)", contentCheck: /^[A-Z_]+=|^#/m },
+    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git", contentCheck: /^ref:\s+refs\// },
+    { path: "/wp-admin/", name: "WordPress Admin", severity: "high" as const, desc: "Interface d'administration WordPress", contentCheck: /wp-login|wordpress|wp-admin/i },
+    { path: "/wp-login.php", name: "WordPress Login", severity: "medium" as const, desc: "Page de connexion WordPress", contentCheck: /wp-login|wordpress|log\s*in/i },
+    { path: "/xmlrpc.php", name: "WordPress XML-RPC", severity: "high" as const, desc: "API XML-RPC (vecteur de brute-force)", contentCheck: /XML-RPC server accepts POST requests only|xmlrpc/i },
+    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /phpMyAdmin|pma_/i },
+    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /adminer/i },
+    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache", contentCheck: /Apache Server Status|Total Accesses/i },
+    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée", contentCheck: /Apache Server Information|mod_/i },
+    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache", contentCheck: /RewriteEngine|RewriteRule|Deny from|Allow from/i },
+    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET", contentCheck: /<configuration|<system\.web/i },
+    { path: "/robots.txt", name: "robots.txt", severity: "info" as const, desc: "Directives pour les moteurs de recherche", contentCheck: /user-agent|disallow|allow|sitemap/i },
+    { path: "/sitemap.xml", name: "sitemap.xml", severity: "info" as const, desc: "Plan du site pour les moteurs de recherche", contentCheck: /<urlset|<sitemapindex/i },
+    { path: "/backup.zip", name: "Fichier de sauvegarde", severity: "critical" as const, desc: "Archive de sauvegarde exposée", contentCheck: /^PK/, contentType: "application/zip" },
+    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé", contentCheck: /CREATE TABLE|INSERT INTO|DROP TABLE|mysqldump/i },
+    { path: "/debug", name: "Page de debug", severity: "high" as const, desc: "Interface de débogage", contentCheck: /debug|stack trace|traceback|exception/i },
+    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP", contentCheck: /phpinfo|PHP Version|Configuration/i },
+    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées", contentCheck: /phpinfo|PHP Version/i },
+    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "medium" as const, desc: "Métadonnées macOS (structure de répertoire)", contentCheck: /Bud1/, contentType: "application/octet-stream" },
+    { path: "/wp-json/wp/v2/users", name: "WordPress REST API Users", severity: "high" as const, desc: "Énumération des utilisateurs WordPress", contentCheck: /"slug"|"name"|wp_user/i },
+    { path: "/api/", name: "Répertoire API", severity: "info" as const, desc: "Point d'entrée API détecté", contentCheck: null },
   ];
 
   const exposed: AuditCheck[] = [];
   const safe: string[] = [];
 
-  // Parallel fetch with concurrency limit
+  // Parallel fetch — use GET (not HEAD) to validate response body
   const results = await Promise.all(
     sensitivePaths.map(async (item) => {
       const res = await safeFetch(`${origin}${item.path}`, {
-        method: "HEAD",
+        method: "GET",
         redirect: "manual",
         timeout: 3000,
       });
-      return { item, status: res?.status || 0 };
+      let bodyMatch = false;
+      if (res && res.status === 200 && item.contentCheck) {
+        try {
+          const contentType = res.headers.get("content-type") || "";
+          // For binary files, check content-type instead of body
+          if (item.contentType) {
+            bodyMatch = contentType.includes(item.contentType);
+          } else {
+            const body = await res.text();
+            // Only check first 5KB to avoid reading huge pages
+            const snippet = body.substring(0, 5000);
+            bodyMatch = item.contentCheck.test(snippet);
+          }
+        } catch {
+          bodyMatch = false;
+        }
+      } else if (res && res.status === 200 && !item.contentCheck) {
+        // No content check needed (e.g. /api/)
+        bodyMatch = true;
+      }
+      return { item, status: res?.status || 0, bodyMatch };
     })
   );
 
-  for (const { item, status } of results) {
-    if (status === 200 && item.severity !== "info") {
+  for (const { item, status, bodyMatch } of results) {
+    if (status === 200 && bodyMatch && item.severity !== "info") {
       exposed.push({
         id: `owasp-${item.path.replace(/[/.]/g, "-")}`,
         category: "owasp",
@@ -481,7 +503,7 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
         value: `${origin}${item.path} → HTTP ${status}`,
         recommendation: `Bloquez l'accès à ${item.path} via votre serveur web ou .htaccess.`,
       });
-    } else if (status === 200 && item.severity === "info") {
+    } else if (status === 200 && bodyMatch && item.severity === "info") {
       checks.push({
         id: `owasp-${item.path.replace(/[/.]/g, "-")}`,
         category: "owasp",
