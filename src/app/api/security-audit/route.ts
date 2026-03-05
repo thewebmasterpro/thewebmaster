@@ -429,37 +429,66 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
 
+  // ── SOFT 404 DETECTION ──────────────────────────────────────
+  // Fetch a random non-existent path to get the "soft 404" fingerprint.
+  // Many SPAs / catch-all servers return 200 with the same HTML for any URL.
+  // We compare each probe response against this fingerprint to detect fakes.
+  let soft404Fingerprint = "";
+  let soft404Length = 0;
+  try {
+    const probe = await safeFetch(
+      `${origin}/__soft404_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      { method: "GET", redirect: "manual", timeout: 4000 }
+    );
+    if (probe && probe.status === 200) {
+      const body = await probe.text();
+      soft404Length = body.length;
+      // Use first 500 chars as fingerprint (avoids dynamic tokens but catches structure)
+      soft404Fingerprint = body.substring(0, 500);
+    }
+  } catch {
+    // If probe fails, no soft 404 detection — rely on content checks only
+  }
+
+  function isSoft404(body: string): boolean {
+    if (!soft404Fingerprint) return false;
+    // Same length (±5%) AND same first 500 chars → soft 404
+    const lengthSimilar = Math.abs(body.length - soft404Length) / Math.max(soft404Length, 1) < 0.05;
+    const contentSimilar = body.substring(0, 500) === soft404Fingerprint;
+    return lengthSimilar && contentSimilar;
+  }
+
   // Sensitive paths to probe
-  // contentCheck: regex to verify the response body actually matches the expected content
-  // This prevents false positives from frameworks returning 200 with custom 404 pages
+  // contentCheck: strict regex to verify the response body is genuinely the expected file/page
+  // NOT an HTML page that happens to contain the keyword
   const sensitivePaths = [
-    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)", contentCheck: /^[A-Z_]+=|^#/m },
-    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git", contentCheck: /^ref:\s+refs\// },
-    { path: "/wp-admin/", name: "WordPress Admin", severity: "high" as const, desc: "Interface d'administration WordPress", contentCheck: /wp-login|wordpress|wp-admin/i },
-    { path: "/wp-login.php", name: "WordPress Login", severity: "medium" as const, desc: "Page de connexion WordPress", contentCheck: /wp-login|wordpress|log\s*in/i },
-    { path: "/xmlrpc.php", name: "WordPress XML-RPC", severity: "high" as const, desc: "API XML-RPC (vecteur de brute-force)", contentCheck: /XML-RPC server accepts POST requests only|xmlrpc/i },
-    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /phpMyAdmin|pma_/i },
-    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /adminer/i },
-    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache", contentCheck: /Apache Server Status|Total Accesses/i },
-    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée", contentCheck: /Apache Server Information|mod_/i },
-    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache", contentCheck: /RewriteEngine|RewriteRule|Deny from|Allow from/i },
-    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET", contentCheck: /<configuration|<system\.web/i },
-    { path: "/robots.txt", name: "robots.txt", severity: "info" as const, desc: "Directives pour les moteurs de recherche", contentCheck: /user-agent|disallow|allow|sitemap/i },
-    { path: "/sitemap.xml", name: "sitemap.xml", severity: "info" as const, desc: "Plan du site pour les moteurs de recherche", contentCheck: /<urlset|<sitemapindex/i },
-    { path: "/backup.zip", name: "Fichier de sauvegarde", severity: "critical" as const, desc: "Archive de sauvegarde exposée", contentCheck: /^PK/, contentType: "application/zip" },
-    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé", contentCheck: /CREATE TABLE|INSERT INTO|DROP TABLE|mysqldump/i },
-    { path: "/debug", name: "Page de debug", severity: "high" as const, desc: "Interface de débogage", contentCheck: /debug|stack trace|traceback|exception/i },
-    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP", contentCheck: /phpinfo|PHP Version|Configuration/i },
-    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées", contentCheck: /phpinfo|PHP Version/i },
-    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "medium" as const, desc: "Métadonnées macOS (structure de répertoire)", contentCheck: /Bud1/, contentType: "application/octet-stream" },
-    { path: "/wp-json/wp/v2/users", name: "WordPress REST API Users", severity: "high" as const, desc: "Énumération des utilisateurs WordPress", contentCheck: /"slug"|"name"|wp_user/i },
-    { path: "/api/", name: "Répertoire API", severity: "info" as const, desc: "Point d'entrée API détecté", contentCheck: null },
+    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)", contentCheck: /^[A-Z_]+=.+$/m, mustNotBeHtml: true },
+    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git", contentCheck: /^ref:\s+refs\//, mustNotBeHtml: true },
+    { path: "/wp-admin/", name: "WordPress Admin", severity: "high" as const, desc: "Interface d'administration WordPress", contentCheck: /wp-login\.php/, mustNotBeHtml: false },
+    { path: "/wp-login.php", name: "WordPress Login", severity: "medium" as const, desc: "Page de connexion WordPress", contentCheck: /name="log"[\s\S]*name="pwd"|wp-login\.php\?action=/i, mustNotBeHtml: false },
+    { path: "/xmlrpc.php", name: "WordPress XML-RPC", severity: "high" as const, desc: "API XML-RPC (vecteur de brute-force)", contentCheck: /XML-RPC server accepts POST requests only/i, mustNotBeHtml: true },
+    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /phpMyAdmin|pma_navigation/i, mustNotBeHtml: false },
+    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /adminer\.design|adminer\.js|name="auth\[/i, mustNotBeHtml: false },
+    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache", contentCheck: /Apache Server Status for|Total Accesses:/i, mustNotBeHtml: false },
+    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée", contentCheck: /Apache Server Information|Server Version:/i, mustNotBeHtml: false },
+    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache", contentCheck: /RewriteEngine|RewriteRule|RewriteCond/i, mustNotBeHtml: true },
+    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET", contentCheck: /^<\?xml[^]*<configuration/i, mustNotBeHtml: true },
+    { path: "/robots.txt", name: "robots.txt", severity: "info" as const, desc: "Directives pour les moteurs de recherche", contentCheck: /^User-agent:/im, mustNotBeHtml: true },
+    { path: "/sitemap.xml", name: "sitemap.xml", severity: "info" as const, desc: "Plan du site pour les moteurs de recherche", contentCheck: /^<\?xml[^]*<urlset|^<\?xml[^]*<sitemapindex/i, mustNotBeHtml: true },
+    { path: "/backup.zip", name: "Fichier de sauvegarde", severity: "critical" as const, desc: "Archive de sauvegarde exposée", contentCheck: /^PK\x03\x04/, mustNotBeHtml: true, contentType: "application/zip" },
+    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé", contentCheck: /^--|^\/\*|CREATE TABLE|INSERT INTO|DROP TABLE|mysqldump/im, mustNotBeHtml: true },
+    { path: "/debug", name: "Page de debug", severity: "high" as const, desc: "Interface de débogage", contentCheck: /Traceback \(most recent|<div class="traceback|Django Debug|Symfony Profiler|laravel_debugbar/i, mustNotBeHtml: false },
+    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP", contentCheck: /phpinfo\(\)|PHP Version \d|Configuration File/i, mustNotBeHtml: false },
+    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées", contentCheck: /phpinfo\(\)|PHP Version \d/i, mustNotBeHtml: false },
+    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "medium" as const, desc: "Métadonnées macOS (structure de répertoire)", contentCheck: /Bud1/, mustNotBeHtml: true, contentType: "application/octet-stream" },
+    { path: "/wp-json/wp/v2/users", name: "WordPress REST API Users", severity: "high" as const, desc: "Énumération des utilisateurs WordPress", contentCheck: /^\s*\[[\s\S]*"slug"\s*:/i, mustNotBeHtml: true },
+    { path: "/api/", name: "Répertoire API", severity: "info" as const, desc: "Point d'entrée API détecté", contentCheck: null, mustNotBeHtml: false },
   ];
 
   const exposed: AuditCheck[] = [];
   const safe: string[] = [];
 
-  // Parallel fetch — use GET (not HEAD) to validate response body
+  // Parallel fetch — use GET to validate response body + soft 404 detection
   const results = await Promise.all(
     sensitivePaths.map(async (item) => {
       const res = await safeFetch(`${origin}${item.path}`, {
@@ -476,16 +505,31 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
             bodyMatch = contentType.includes(item.contentType);
           } else {
             const body = await res.text();
-            // Only check first 5KB to avoid reading huge pages
-            const snippet = body.substring(0, 5000);
-            bodyMatch = item.contentCheck.test(snippet);
+
+            // Soft 404 detection — if response matches the catch-all page, skip
+            if (isSoft404(body)) {
+              bodyMatch = false;
+            } else {
+              // If file must NOT be HTML but response is HTML → false positive
+              if (item.mustNotBeHtml && (contentType.includes("text/html") || body.trimStart().startsWith("<!") || body.trimStart().startsWith("<html"))) {
+                bodyMatch = false;
+              } else {
+                const snippet = body.substring(0, 5000);
+                bodyMatch = item.contentCheck.test(snippet);
+              }
+            }
           }
         } catch {
           bodyMatch = false;
         }
       } else if (res && res.status === 200 && !item.contentCheck) {
-        // No content check needed (e.g. /api/)
-        bodyMatch = true;
+        // No content check needed (e.g. /api/) — but still check soft 404
+        try {
+          const body = await res.text();
+          bodyMatch = !isSoft404(body);
+        } catch {
+          bodyMatch = false;
+        }
       }
       return { item, status: res?.status || 0, bodyMatch };
     })
@@ -515,6 +559,18 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
     } else {
       safe.push(item.path);
     }
+  }
+
+  // Soft 404 warning — if catch-all detected, inform user
+  if (soft404Fingerprint) {
+    checks.push({
+      id: "owasp-soft404",
+      category: "owasp",
+      name: "Détection Soft 404 (Catch-All)",
+      status: "info",
+      description: "Le serveur retourne HTTP 200 pour les pages inexistantes au lieu de 404. Cela peut masquer des problèmes réels et tromper les scanners.",
+      recommendation: "Configurez votre serveur pour retourner un vrai status 404 pour les pages inexistantes.",
+    });
   }
 
   checks.push(...exposed);
@@ -1059,18 +1115,52 @@ async function checkIncidentResponse(baseUrl: string, headers: Headers, html: st
       : undefined,
   });
 
-  // Backup files exposure
+  // Backup files exposure — with soft 404 detection
   const backupPaths = [
     "/backup.zip", "/backup.tar.gz", "/backup.sql.gz",
     "/db.sql", "/database.sql", "/dump.sql",
     "/site.zip", "/www.zip", "/public.zip",
   ];
 
+  // Build soft 404 fingerprint for this function
+  let backupSoft404Fingerprint = "";
+  let backupSoft404Length = 0;
+  try {
+    const probe = await safeFetch(
+      `${origin}/__soft404_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      { method: "GET", redirect: "manual", timeout: 4000 }
+    );
+    if (probe && probe.status === 200) {
+      const body = await probe.text();
+      backupSoft404Length = body.length;
+      backupSoft404Fingerprint = body.substring(0, 500);
+    }
+  } catch {}
+
   const exposedBackups: string[] = [];
   await Promise.all(
     backupPaths.map(async (path) => {
-      const res = await safeFetch(`${origin}${path}`, { method: "HEAD", timeout: 3000 });
-      if (res?.ok) exposedBackups.push(path);
+      const res = await safeFetch(`${origin}${path}`, { method: "GET", timeout: 4000 });
+      if (!res?.ok) return;
+
+      const contentType = res.headers.get("content-type") || "";
+      // Backup files should NEVER be HTML — if HTML, it's a soft 404 / catch-all
+      if (contentType.includes("text/html") || contentType.includes("application/xhtml")) return;
+
+      // Check content-type matches expected binary/sql types
+      const isBinary = contentType.includes("application/") || contentType.includes("octet-stream");
+      const isSql = contentType.includes("text/plain") || contentType.includes("text/sql");
+      if (!isBinary && !isSql) return;
+
+      // Soft 404 check: compare body against fingerprint
+      if (backupSoft404Fingerprint) {
+        const body = await res.text().catch(() => "");
+        const lengthSimilar = Math.abs(body.length - backupSoft404Length) / Math.max(backupSoft404Length, 1) < 0.05;
+        const contentSimilar = body.substring(0, 500) === backupSoft404Fingerprint;
+        if (lengthSimilar && contentSimilar) return;
+      }
+
+      exposedBackups.push(path);
     })
   );
 
