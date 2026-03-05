@@ -887,12 +887,13 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
 // 7. RGPD / COMPLIANCE
 // =============================================================================
 
-function checkRGPD(html: string, baseUrl: string): AuditCheck[] {
+async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const lower = html.toLowerCase();
+  const origin = new URL(baseUrl).origin;
 
   // Privacy policy detection — check text, links and href attributes
-  const hasPrivacyLink =
+  let hasPrivacyLink =
     lower.includes("privacy") ||
     lower.includes("vie privée") ||
     lower.includes("confidentialité") ||
@@ -906,9 +907,54 @@ function checkRGPD(html: string, baseUrl: string): AuditCheck[] {
     lower.includes("datenschutz") ||
     lower.includes("rgpd") ||
     lower.includes("gdpr") ||
-    /href="[^"]*privac/i.test(html) ||
-    /href="[^"]*confidentialite/i.test(html) ||
-    /href="[^"]*donnees-personnelles/i.test(html);
+    /href=['"][^'"]*privac/i.test(html) ||
+    /href=['"][^'"]*confidentialite/i.test(html) ||
+    /href=['"][^'"]*donnees-personnelles/i.test(html);
+
+  // Legal notice — check text and href attributes
+  let hasLegal =
+    lower.includes("mentions légales") ||
+    lower.includes("mentions legales") ||
+    lower.includes("legal notice") ||
+    lower.includes("legal-notice") ||
+    lower.includes("impressum") ||
+    lower.includes("wettelijke vermeldingen") ||
+    /href=['"][^'"]*mentions-legales/i.test(html) ||
+    /href=['"][^'"]*legal/i.test(html);
+
+  // Fallback: probe common page URLs when not found in HTML
+  // (handles client-side rendered links not visible in raw HTML)
+  if (!hasPrivacyLink || !hasLegal) {
+    const probes: { path: string; target: "privacy" | "legal" }[] = [];
+    if (!hasPrivacyLink) {
+      probes.push(
+        { path: "/privacy-policy", target: "privacy" },
+        { path: "/privacy", target: "privacy" },
+        { path: "/politique-de-confidentialite", target: "privacy" },
+        { path: "/confidentialite", target: "privacy" },
+        { path: "/privacybeleid", target: "privacy" },
+        { path: "/datenschutz", target: "privacy" },
+      );
+    }
+    if (!hasLegal) {
+      probes.push(
+        { path: "/mentions-legales", target: "legal" },
+        { path: "/legal", target: "legal" },
+        { path: "/legal-notice", target: "legal" },
+        { path: "/impressum", target: "legal" },
+        { path: "/wettelijke-vermeldingen", target: "legal" },
+      );
+    }
+    await Promise.all(
+      probes.map(async ({ path, target }) => {
+        const res = await safeFetch(`${origin}${path}`, { method: "HEAD", timeout: 3000, redirect: "follow" });
+        if (res?.ok) {
+          if (target === "privacy") hasPrivacyLink = true;
+          else hasLegal = true;
+        }
+      })
+    );
+  }
 
   checks.push({
     id: "rgpd-privacy",
@@ -923,17 +969,6 @@ function checkRGPD(html: string, baseUrl: string): AuditCheck[] {
       ? "Ajoutez une page de politique de confidentialité accessible depuis toutes les pages."
       : undefined,
   });
-
-  // Legal notice
-  const hasLegal =
-    lower.includes("mentions légales") ||
-    lower.includes("mentions legales") ||
-    lower.includes("legal notice") ||
-    lower.includes("legal-notice") ||
-    lower.includes("impressum") ||
-    lower.includes("wettelijke vermeldingen") ||
-    /href="[^"]*mentions-legales/i.test(html) ||
-    /href="[^"]*legal/i.test(html);
 
   checks.push({
     id: "rgpd-legal",
@@ -1622,11 +1657,12 @@ export async function POST(request: NextRequest) {
     const headers = response.headers;
 
     // Run all checks in parallel where possible
-    const [sslChecks, owaspChecks, infraChecks, incidentChecks] = await Promise.all([
+    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks] = await Promise.all([
       checkSSL(targetUrl, isHttps),
       checkOWASP(targetUrl, html),
       checkInfrastructure(targetUrl, headers),
       checkIncidentResponse(targetUrl, headers, html),
+      checkRGPD(html, targetUrl),
     ]);
 
     const allChecks: AuditCheck[] = [
@@ -1636,7 +1672,7 @@ export async function POST(request: NextRequest) {
       ...checkCookies(headers),
       ...owaspChecks,
       ...infraChecks,
-      ...checkRGPD(html, targetUrl),
+      ...rgpdChecks,
       ...checkXSSVectors(html),
       ...incidentChecks,
       ...checkPerformance(headers, html, responseTime),
