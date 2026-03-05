@@ -22,6 +22,11 @@ import {
   ChevronDown,
   ChevronUp,
   Cpu,
+  Bug,
+  Scale,
+  Siren,
+  Network,
+  Gauge,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -31,6 +36,7 @@ interface AuditCheck {
   category: string;
   name: string;
   status: "pass" | "warn" | "fail" | "info";
+  severity?: "critical" | "high" | "medium" | "low" | "info";
   description: string;
   value?: string;
   recommendation?: string;
@@ -52,8 +58,12 @@ const categoryLabels: Record<string, { label: string; icon: typeof Shield }> = {
   headers: { label: "En-têtes de sécurité", icon: Shield },
   "info-leak": { label: "Fuite d'information", icon: Server },
   cookies: { label: "Cookies", icon: Cookie },
-  xss: { label: "Protection XSS", icon: ShieldAlert },
-  performance: { label: "Performance", icon: Clock },
+  owasp: { label: "OWASP — Vulnérabilités Web", icon: Bug },
+  xss: { label: "Protection XSS & CSRF", icon: ShieldAlert },
+  infra: { label: "Infrastructure & DNS", icon: Network },
+  rgpd: { label: "RGPD / Compliance", icon: Scale },
+  incident: { label: "Incident Response & Monitoring", icon: Siren },
+  performance: { label: "Performance", icon: Gauge },
   misc: { label: "Divers", icon: Globe },
 };
 
@@ -111,15 +121,24 @@ function ScoreRing({ score, grade }: { score: number; grade: string }) {
   );
 }
 
+const severityConfig: Record<string, { label: string; color: string }> = {
+  critical: { label: "CRITIQUE", color: "text-red-600 bg-red-500/15 border-red-500/30" },
+  high: { label: "ÉLEVÉ", color: "text-orange-500 bg-orange-500/15 border-orange-500/30" },
+  medium: { label: "MOYEN", color: "text-yellow-500 bg-yellow-500/15 border-yellow-500/30" },
+  low: { label: "FAIBLE", color: "text-blue-400 bg-blue-400/15 border-blue-400/30" },
+};
+
 function CheckCard({ check }: { check: AuditCheck }) {
   const [expanded, setExpanded] = useState(false);
   const config = statusConfig[check.status];
   const StatusIcon = config.icon;
+  const sev = check.severity && check.severity !== "info" ? severityConfig[check.severity] : null;
 
   return (
     <div
       className={cn(
         "border rounded-xl transition-all",
+        check.severity === "critical" ? "border-red-500/40 bg-red-500/5" :
         check.status === "fail" ? "border-red-500/30" : "border-border/50"
       )}
     >
@@ -134,6 +153,11 @@ function CheckCard({ check }: { check: AuditCheck }) {
           <p className="font-medium text-sm">{check.name}</p>
           <p className="text-xs text-muted-foreground truncate">{check.description}</p>
         </div>
+        {sev && (
+          <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0", sev.color)}>
+            {sev.label}
+          </span>
+        )}
         <span
           className={cn(
             "text-xs font-semibold px-2 py-0.5 rounded-full shrink-0",
