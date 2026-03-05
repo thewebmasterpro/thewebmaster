@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "/Volumes/DEV/thewebmaster/src/app/api",
+      "/Volumes/DEV/thewebmaster/src/app/[locale]"
+    ]
+  }
+}
