@@ -30,9 +30,11 @@ import {
   FileText,
   Copy,
   Check,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import jsPDF from "jspdf";
 
 interface AuditCheck {
   id: string;
@@ -511,6 +513,336 @@ function generateReportText(result: AuditResult): string {
   return r;
 }
 
+function generatePDF(result: AuditResult) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const hostname = new URL(result.url).hostname;
+  const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+    day: "numeric", month: "long", year: "numeric",
+  });
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 20;
+  const contentW = pageW - margin * 2;
+  let y = 0;
+
+  const colors = {
+    primary: [59, 130, 246] as [number, number, number],
+    dark: [15, 23, 42] as [number, number, number],
+    text: [51, 65, 85] as [number, number, number],
+    muted: [100, 116, 139] as [number, number, number],
+    green: [34, 197, 94] as [number, number, number],
+    red: [239, 68, 68] as [number, number, number],
+    orange: [249, 115, 22] as [number, number, number],
+    yellow: [234, 179, 8] as [number, number, number],
+    white: [255, 255, 255] as [number, number, number],
+    lightBg: [241, 245, 249] as [number, number, number],
+  };
+
+  function checkPage(needed: number) {
+    if (y + needed > pageH - 20) {
+      // Footer before new page
+      doc.setFontSize(7);
+      doc.setTextColor(...colors.muted);
+      doc.text(`The Webmaster — Security Audit Report — ${hostname}`, pageW / 2, pageH - 10, { align: "center" });
+      doc.addPage();
+      y = 20;
+    }
+  }
+
+  function sectionTitle(title: string) {
+    checkPage(14);
+    doc.setFontSize(13);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...colors.primary);
+    doc.text(title, margin, y);
+    y += 2;
+    doc.setDrawColor(...colors.primary);
+    doc.setLineWidth(0.5);
+    doc.line(margin, y, pageW - margin, y);
+    y += 6;
+  }
+
+  function bodyText(text: string, opts?: { bold?: boolean; color?: [number, number, number]; indent?: number }) {
+    const indent = opts?.indent ?? 0;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", opts?.bold ? "bold" : "normal");
+    doc.setTextColor(...(opts?.color ?? colors.text));
+    const lines = doc.splitTextToSize(text, contentW - indent);
+    for (const line of lines) {
+      checkPage(5);
+      doc.text(line, margin + indent, y);
+      y += 4.2;
+    }
+  }
+
+  // ─── COVER / HEADER ──────────────────────────────────────────
+  doc.setFillColor(...colors.dark);
+  doc.rect(0, 0, pageW, 58, "F");
+  doc.setFillColor(...colors.primary);
+  doc.rect(0, 58, pageW, 3, "F");
+
+  doc.setTextColor(...colors.white);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text("THE WEBMASTER — SECURITY AUDIT TOOL", margin, 18);
+
+  doc.setFontSize(22);
+  doc.setFont("helvetica", "bold");
+  doc.text("Rapport d'Audit de Sécurité", margin, 33);
+
+  doc.setFontSize(14);
+  doc.setFont("helvetica", "normal");
+  doc.text(hostname.toUpperCase(), margin, 43);
+
+  doc.setFontSize(9);
+  doc.setTextColor(180, 200, 230);
+  doc.text(date, margin, 52);
+
+  y = 72;
+
+  // ─── SCORE BOX ────────────────────────────────────────────────
+  const gradeColor = result.score >= 85 ? colors.green : result.score >= 60 ? colors.yellow : colors.red;
+  doc.setFillColor(...colors.lightBg);
+  doc.roundedRect(margin, y, contentW, 28, 3, 3, "F");
+  doc.setDrawColor(...gradeColor);
+  doc.setLineWidth(0.8);
+  doc.roundedRect(margin, y, contentW, 28, 3, 3, "S");
+
+  doc.setFontSize(28);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...gradeColor);
+  doc.text(result.grade, margin + 12, y + 18);
+
+  doc.setFontSize(11);
+  doc.setTextColor(...colors.dark);
+  doc.text(`${result.score}/100`, margin + 30, y + 12);
+
+  doc.setFontSize(9);
+  doc.setTextColor(...colors.muted);
+  doc.text(statusLabels[result.status].replace(/[^\w\sÀ-ÿ—]/g, "").trim(), margin + 30, y + 20);
+
+  // Counters
+  const criticals = result.checks.filter(c => c.severity === "critical" && c.status === "fail");
+  const highs = result.checks.filter(c => c.severity === "high" && c.status === "fail");
+  const passes = result.checks.filter(c => c.status === "pass");
+  const fails = result.checks.filter(c => c.status === "fail");
+  const warns = result.checks.filter(c => c.status === "warn");
+
+  const cx = margin + contentW - 70;
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...colors.green); doc.text(`${passes.length} OK`, cx, y + 10);
+  doc.setTextColor(...colors.yellow); doc.text(`${warns.length} Alertes`, cx + 22, y + 10);
+  doc.setTextColor(...colors.red); doc.text(`${fails.length} Critiques`, cx + 48, y + 10);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(...colors.muted);
+  doc.text(`${result.checks.length} tests | ${result.responseTime}ms`, cx, y + 19);
+
+  y += 36;
+
+  // ─── 1. RÉSUMÉ EXÉCUTIF ───────────────────────────────────────
+  sectionTitle("1. Résumé Exécutif");
+  bodyText(`URL analysée : ${result.url}`);
+  bodyText(`Score global : ${result.score}/100 (${result.grade}) — ${statusLabels[result.status].replace(/[^\w\sÀ-ÿ—]/g, "").trim()}`);
+  bodyText(`HTTPS : ${result.tlsInfo.secure ? "Oui" : "Non"} | Temps de réponse : ${result.responseTime}ms`);
+  bodyText(`Vulnérabilités : ${criticals.length} critiques, ${highs.length} élevées, ${warns.length} alertes`);
+  y += 3;
+
+  const topActions = [...criticals, ...highs].filter(c => c.recommendation).slice(0, 5);
+  if (topActions.length > 0) {
+    bodyText("Top actions prioritaires :", { bold: true });
+    topActions.forEach((c, i) => {
+      bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 });
+    });
+    y += 2;
+  }
+
+  // ─── 2. SCOPE & MÉTHODOLOGIE ──────────────────────────────────
+  sectionTitle("2. Scope & Méthodologie");
+  bodyText(`Périmètre : ${result.url} — Analyse externe (boîte noire)`);
+  bodyText(`${result.checks.length} vérifications automatisées`);
+  if (result.technologies.length > 0) {
+    bodyText(`Technologies détectées : ${result.technologies.join(", ")}`);
+  }
+  bodyText("Standards : OWASP Top 10 (2021), RGPD, RFC 9116, Mozilla Observatory");
+  y += 3;
+
+  // ─── 3. SCORES PAR CATÉGORIE ──────────────────────────────────
+  sectionTitle("3. Scores par Catégorie");
+  result.categoryScores.forEach(cs => {
+    checkPage(8);
+    const barWidth = contentW - 50;
+    const filled = (cs.score / 100) * barWidth;
+    const barColor = cs.score >= 85 ? colors.green : cs.score >= 60 ? colors.yellow : cs.score >= 40 ? colors.orange : colors.red;
+
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...colors.text);
+    doc.text(cs.label, margin, y);
+
+    doc.setFillColor(230, 230, 230);
+    doc.roundedRect(margin + 55, y - 3, barWidth - 55, 4, 1, 1, "F");
+    doc.setFillColor(...barColor);
+    doc.roundedRect(margin + 55, y - 3, Math.max((filled - 55), 0), 4, 1, 1, "F");
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...barColor);
+    doc.text(`${cs.score}/100 (${cs.grade})`, pageW - margin, y, { align: "right" });
+    y += 7;
+  });
+  y += 3;
+
+  // ─── 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES ────────────────────
+  const urgent = [...criticals, ...highs];
+  sectionTitle("4. Vulnérabilités Critiques & Élevées");
+  if (urgent.length === 0) {
+    bodyText("Aucune vulnérabilité critique ou élevée détectée.", { color: colors.green });
+    y += 3;
+  } else {
+    urgent.forEach(c => {
+      const sevColor = c.severity === "critical" ? colors.red : colors.orange;
+      const sevLabel = c.severity === "critical" ? "CRITIQUE" : "ÉLEVÉ";
+      bodyText(`[${sevLabel}] ${c.name}`, { bold: true, color: sevColor });
+      bodyText(c.description, { indent: 4 });
+      if (c.value) bodyText(`Valeur : ${c.value}`, { indent: 4, color: colors.muted });
+      if (c.recommendation) bodyText(`Remédiation : ${c.recommendation}`, { indent: 4, color: colors.primary });
+      y += 2;
+    });
+  }
+
+  // ─── 5. ALERTES MOYENNES ──────────────────────────────────────
+  const mediums = result.checks.filter(c => c.severity === "medium" && c.status !== "pass");
+  sectionTitle("5. Alertes de Sévérité Moyenne");
+  if (mediums.length === 0) {
+    bodyText("Aucune alerte de sévérité moyenne.", { color: colors.green });
+    y += 3;
+  } else {
+    mediums.forEach((c, i) => {
+      bodyText(`${i + 1}. ${c.name}`, { bold: true });
+      bodyText(c.description, { indent: 4 });
+      if (c.recommendation) bodyText(`→ ${c.recommendation}`, { indent: 4, color: colors.primary });
+      y += 1;
+    });
+    y += 2;
+  }
+
+  // ─── 6. RECOMMANDATIONS ───────────────────────────────────────
+  const lows = result.checks.filter(c => c.severity === "low" && c.status !== "pass");
+  sectionTitle("6. Recommandations (Faibles)");
+  if (lows.length === 0) {
+    bodyText("Aucune recommandation de faible sévérité.", { color: colors.green });
+    y += 3;
+  } else {
+    lows.forEach((c, i) => {
+      bodyText(`${i + 1}. ${c.name} — ${c.description}`, { indent: 0 });
+      if (c.recommendation) bodyText(`→ ${c.recommendation}`, { indent: 4, color: colors.primary });
+      y += 1;
+    });
+    y += 2;
+  }
+
+  // ─── 7. INVENTAIRE DÉTAILLÉ ───────────────────────────────────
+  sectionTitle("7. Inventaire Détaillé par Catégorie");
+  const grouped = result.checks.reduce((acc, check) => {
+    if (!acc[check.category]) acc[check.category] = [];
+    acc[check.category].push(check);
+    return acc;
+  }, {} as Record<string, AuditCheck[]>);
+
+  Object.entries(grouped).forEach(([cat, checks]) => {
+    const catScore = result.categoryScores.find(cs => cs.category === cat);
+    checkPage(8);
+    bodyText(`${catScore?.label || cat} — ${catScore?.score ?? "?"}/100 (${catScore?.grade ?? "?"})`, { bold: true });
+    checks.forEach(c => {
+      const icon = c.status === "pass" ? "[OK]" : c.status === "fail" ? "[FAIL]" : c.status === "warn" ? "[WARN]" : "[INFO]";
+      const iconColor = c.status === "pass" ? colors.green : c.status === "fail" ? colors.red : c.status === "warn" ? colors.yellow : colors.muted;
+      bodyText(`  ${icon} ${c.name}`, { color: iconColor, indent: 4 });
+    });
+    y += 2;
+  });
+
+  // ─── 8. POINTS POSITIFS ───────────────────────────────────────
+  if (passes.length > 0) {
+    sectionTitle("8. Points Positifs");
+    passes.forEach(c => {
+      bodyText(`• ${c.name}`, { color: colors.green });
+    });
+    y += 3;
+  }
+
+  // ─── 9. ROADMAP ───────────────────────────────────────────────
+  sectionTitle("9. Roadmap de Remédiation");
+  const immActions = urgent.filter(c => c.recommendation);
+  const shortActions = mediums.filter(c => c.recommendation);
+  const longActions = lows.filter(c => c.recommendation);
+
+  if (immActions.length > 0) {
+    bodyText("Actions immédiates (0-7 jours) :", { bold: true, color: colors.red });
+    immActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
+    y += 2;
+  }
+  if (shortActions.length > 0) {
+    bodyText("Court terme (1-3 mois) :", { bold: true, color: colors.orange });
+    shortActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
+    y += 2;
+  }
+  if (longActions.length > 0) {
+    bodyText("Long terme (3-12 mois) :", { bold: true, color: colors.muted });
+    longActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
+    y += 2;
+  }
+  if (immActions.length === 0 && shortActions.length === 0 && longActions.length === 0) {
+    bodyText("Aucune action corrective majeure nécessaire. Maintenir une veille régulière.", { color: colors.green });
+    y += 3;
+  }
+
+  // ─── 10. CONCLUSION ───────────────────────────────────────────
+  sectionTitle("10. Conclusion");
+  if (result.score >= 85) {
+    bodyText(`Le site ${hostname} présente un bon niveau de sécurité (${result.grade}, ${result.score}/100). Les fondamentaux sont en place. Quelques améliorations mineures permettraient d'atteindre un niveau optimal.`);
+    bodyText("Recommandation : Maintenir le niveau actuel avec des audits trimestriels et une veille sur les nouvelles vulnérabilités.");
+  } else if (result.score >= 60) {
+    bodyText(`Le site ${hostname} présente un niveau de sécurité acceptable (${result.grade}, ${result.score}/100) mais nécessite des améliorations significatives.`);
+    bodyText("Recommandation : Priorisez les corrections critiques et élevées dans les 7 prochains jours.");
+  } else if (result.score >= 40) {
+    bodyText(`Le site ${hostname} présente des faiblesses de sécurité importantes (${result.grade}, ${result.score}/100). Une intervention rapide est nécessaire.`);
+    bodyText("Recommandation : Mobilisez une équipe technique pour corriger les vulnérabilités critiques dans les 24-48h.");
+  } else {
+    bodyText(`Le site ${hostname} présente un niveau de sécurité insuffisant (${result.grade}, ${result.score}/100). Des risques majeurs ont été identifiés.`);
+    bodyText("URGENCE — Stoppez toute mise en production. Un audit approfondi par un professionnel de la cybersécurité est fortement recommandé.", { bold: true, color: colors.red });
+  }
+
+  // ─── FOOTER (last page) ───────────────────────────────────────
+  y += 10;
+  checkPage(20);
+  doc.setDrawColor(...colors.primary);
+  doc.setLineWidth(0.5);
+  doc.line(margin, y, pageW - margin, y);
+  y += 6;
+  doc.setFontSize(8);
+  doc.setTextColor(...colors.muted);
+  doc.text("Rapport généré par The Webmaster — Security Audit Tool v2.0", margin, y);
+  y += 4;
+  doc.text("https://thewebmaster.pro/fr/security-audit", margin, y);
+  y += 4;
+  doc.text(date, margin, y);
+
+  // Page numbers
+  const totalPages = doc.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(...colors.muted);
+    doc.text(`Page ${i}/${totalPages}`, pageW - margin, pageH - 10, { align: "right" });
+    if (i > 1) {
+      doc.text(`The Webmaster — Security Audit Report — ${hostname}`, pageW / 2, pageH - 10, { align: "center" });
+    }
+  }
+
+  doc.save(`audit-securite-${hostname}-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
 function AuditReport({ result }: { result: AuditResult }) {
   const [copied, setCopied] = useState(false);
   const report = generateReportText(result);
@@ -535,19 +867,25 @@ function AuditReport({ result }: { result: AuditResult }) {
             </p>
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2">
-          {copied ? (
-            <>
-              <Check className="w-4 h-4 text-green-500" />
-              Copié
-            </>
-          ) : (
-            <>
-              <Copy className="w-4 h-4" />
-              Copier
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => generatePDF(result)} className="gap-2">
+            <Download className="w-4 h-4" />
+            PDF
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2">
+            {copied ? (
+              <>
+                <Check className="w-4 h-4 text-green-500" />
+                Copié
+              </>
+            ) : (
+              <>
+                <Copy className="w-4 h-4" />
+                Copier
+              </>
+            )}
+          </Button>
+        </div>
       </div>
       <pre className="p-5 text-xs leading-relaxed text-foreground/90 overflow-x-auto whitespace-pre-wrap font-mono bg-muted/20 max-h-[600px] overflow-y-auto">
         {report}
