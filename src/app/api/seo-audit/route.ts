@@ -274,7 +274,7 @@ async function checkTechnical(
   if (hasRobots) {
     robotsContent = await robotsRes.text();
   }
-  const blocksAll = robotsContent.includes("Disallow: /") && !robotsContent.includes("Disallow: /\n");
+  const blocksAll = /^Disallow:\s*\/\s*$/m.test(robotsContent);
   checks.push({
     id: "tech-robots",
     category: "technical",
@@ -561,7 +561,7 @@ function checkOnPage(
 
   // Image formats (WebP/AVIF detection)
   const imgSrcs = extractAllAttributes(html, "img", "src");
-  const modernFormats = imgSrcs.filter((s) => /\.(webp|avif)/i.test(s));
+  const modernFormats = imgSrcs.filter((s) => /\.(webp|avif)/i.test(s) || /\/_next\/image/i.test(s));
   const hasModernFormats = modernFormats.length > 0 || imgSrcs.length === 0;
   checks.push({
     id: "onpage-img-format",
@@ -707,10 +707,11 @@ function checkPerformance(html: string, headers: Headers, responseTime: number, 
   const checks: SeoCheck[] = [];
 
   // Render-blocking resources
-  const blockingCss = (html.match(/<link[^>]*rel=["']stylesheet["'][^>]*>/gi) || []).length;
+  const blockingCss = (html.match(/<link[^>]*rel=["']stylesheet["'][^>]*>/gi) || [])
+    .filter((s) => !/data-precedence|media=["']print["']/i.test(s)).length;
   const blockingJs = (
     html.match(/<script[^>]*src=["'][^"']*["'][^>]*>/gi) || []
-  ).filter((s) => !/async|defer/i.test(s)).length;
+  ).filter((s) => !/async|defer|nomodule/i.test(s)).length;
   const blockingStatus = blockingCss + blockingJs === 0 ? "pass" : blockingCss + blockingJs <= 3 ? "warn" : "fail";
   checks.push({
     id: "perf-render-blocking",
@@ -866,9 +867,9 @@ async function checkOffPage(targetUrl: string, html: string): Promise<SeoCheck[]
       : undefined,
   });
 
-  // Check for analytics
+  // Check for analytics (scripts, preconnect hints, data attributes)
   const hasAnalytics =
-    /google-analytics|gtag|googletagmanager|umami|matomo|plausible|fathom/i.test(html);
+    /google-analytics|gtag|googletagmanager|umami|matomo|plausible|fathom|analytics\.[a-z0-9-]+\.[a-z]{2,}/i.test(html);
   checks.push({
     id: "offpage-analytics",
     category: "offpage",

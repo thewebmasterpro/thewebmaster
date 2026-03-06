@@ -69,6 +69,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Remove X-Powered-By header
+  poweredByHeader: false,
+
   // Security headers
   async headers() {
     return [

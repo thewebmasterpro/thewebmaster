@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Resend } from "resend";
+import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
+import { verifyCsrf } from "@/lib/csrf";
 
 interface ContactPayload {
   name: string;
@@ -25,6 +27,19 @@ async function verifyRecaptcha(token: string): Promise<boolean> {
 
 export async function POST(request: NextRequest) {
   try {
+    // CSRF protection
+    if (!verifyCsrf(request)) {
+      return NextResponse.json(
+        { error: "Invalid request origin" },
+        { status: 403 }
+      );
+    }
+
+    // Rate limiting: 5 requests per minute per IP
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+    const { limited } = rateLimit(ip, { max: 5, windowMs: 60_000 });
+    if (limited) return rateLimitResponse();
+
     const body: ContactPayload = await request.json();
 
     if (!body.name || !body.email || !body.message) {

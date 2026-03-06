@@ -12,7 +12,7 @@ export const seoConfig = {
   defaultTitle: "The Webmaster — Agence Digitale en Belgique",
   titleTemplate: "%s | The Webmaster",
   defaultDescription:
-    "Agence digitale belge spécialisée en création de sites web, design graphique, réseaux sociaux et publicité digitale. Propulsez votre business en ligne.",
+    "Agence digitale belge : création de sites web, design graphique, réseaux sociaux et publicité digitale. Propulsez votre business en ligne.",
 
   // Default images
   defaultOgImage: "/og-image.jpg",
