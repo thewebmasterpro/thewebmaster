@@ -127,7 +127,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       status: "fail",
       severity: "high",
       description: "HSTS absent. Vulnérable aux attaques de downgrade SSL et MITM.",
-      recommendation: "Ajoutez: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload",
+      recommendation: `Ajoutez l'en-tête HSTS :\n\n# Nginx\nadd_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;\n\n# Apache (.htaccess)\nHeader always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"\n\n// Next.js (next.config.js)\nheaders: [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' }]`,
     });
   } else {
     const maxAge = parseInt(hsts.match(/max-age=(\d+)/)?.[1] || "0");
@@ -161,7 +161,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       status: "fail",
       severity: "high",
       description: "Aucune CSP définie. Le site est vulnérable aux attaques XSS et injection de code.",
-      recommendation: "Implémentez une CSP restrictive. Commencez par: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'",
+      recommendation: `Implémentez une Content Security Policy :\n\n# Nginx\nadd_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; frame-ancestors 'self';" always;\n\n// Next.js (next.config.js)\nheaders: [{\n  key: 'Content-Security-Policy',\n  value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;"\n}]`,
     });
   } else {
     const issues: string[] = [];
@@ -196,7 +196,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       id: "x-content-type",
       display: "X-Content-Type-Options",
       severity: "medium" as const,
-      rec: "Ajoutez: X-Content-Type-Options: nosniff",
+      rec: "Ajoutez l'en-tête :\n\n# Nginx\nadd_header X-Content-Type-Options \"nosniff\" always;\n\n# Apache\nHeader always set X-Content-Type-Options \"nosniff\"\n\n// Next.js\nheaders: [{ key: 'X-Content-Type-Options', value: 'nosniff' }]",
       desc: "Empêche le MIME-type sniffing qui peut mener à des attaques XSS.",
     },
     {
@@ -204,7 +204,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       id: "x-frame",
       display: "X-Frame-Options (Clickjacking)",
       severity: "high" as const,
-      rec: "Ajoutez: X-Frame-Options: DENY ou SAMEORIGIN pour prévenir le clickjacking.",
+      rec: "Protégez contre le clickjacking :\n\n# Nginx\nadd_header X-Frame-Options \"DENY\" always;\n\n# Apache\nHeader always set X-Frame-Options \"DENY\"\n\n// Next.js\nheaders: [{ key: 'X-Frame-Options', value: 'DENY' }]\n\nUtilisez SAMEORIGIN si vous avez besoin d'iframes internes.",
       desc: "Protège contre les attaques de clickjacking via iframe.",
     },
     {
@@ -212,7 +212,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       id: "referrer",
       display: "Referrer-Policy",
       severity: "low" as const,
-      rec: "Ajoutez: Referrer-Policy: strict-origin-when-cross-origin",
+      rec: "Contrôlez les informations Referer :\n\n# Nginx\nadd_header Referrer-Policy \"strict-origin-when-cross-origin\" always;\n\n// Next.js\nheaders: [{ key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }]",
       desc: "Contrôle les informations envoyées dans le header Referer.",
     },
     {
@@ -220,7 +220,7 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       id: "permissions",
       display: "Permissions-Policy",
       severity: "medium" as const,
-      rec: "Ajoutez: Permissions-Policy: camera=(), microphone=(), geolocation=()",
+      rec: "Restreignez les APIs navigateur :\n\n# Nginx\nadd_header Permissions-Policy \"camera=(), microphone=(), geolocation=(), interest-cohort=()\" always;\n\n// Next.js\nheaders: [{ key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' }]",
       desc: "Contrôle l'accès aux APIs sensibles du navigateur (caméra, micro, géolocalisation).",
     },
     {
@@ -1482,6 +1482,314 @@ function detectTechnologies(headers: Headers, html: string): string[] {
 }
 
 // =============================================================================
+// 10. WORDPRESS-SPECIFIC SECURITY CHECKS
+// =============================================================================
+
+async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const lower = html.toLowerCase();
+
+  // Only run if WordPress is detected
+  const isWP =
+    lower.includes("wp-content") ||
+    lower.includes("wp-includes") ||
+    lower.includes("wordpress");
+  if (!isWP) return checks;
+
+  checks.push({
+    id: "wp-detected",
+    category: "wordpress",
+    name: "WordPress détecté",
+    status: "info",
+    description: "Ce site utilise WordPress. Des vérifications spécifiques vont être effectuées.",
+  });
+
+  // ── WordPress Version Exposure ──
+  const wpVersionMeta = html.match(/content="WordPress\s+([\d.]+)"/i);
+  const wpVersionGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["'][^"']*WordPress\s+([\d.]+)/i);
+  const wpVersion = wpVersionMeta?.[1] || wpVersionGen?.[1];
+
+  checks.push({
+    id: "wp-version",
+    category: "wordpress",
+    name: "Version WordPress exposée",
+    status: wpVersion ? "fail" : "pass",
+    severity: wpVersion ? "high" : undefined,
+    description: wpVersion
+      ? `WordPress ${wpVersion} détecté dans le code source. Les attaquants peuvent cibler les vulnérabilités connues de cette version.`
+      : "La version WordPress n'est pas exposée dans le code source.",
+    value: wpVersion || undefined,
+    recommendation: wpVersion
+      ? `Masquez la version WordPress :\n\n// functions.php\nremove_action('wp_head', 'wp_generator');\nadd_filter('the_generator', '__return_empty_string');`
+      : undefined,
+  });
+
+  // ── readme.html ──
+  const readmeRes = await safeFetch(`${origin}/readme.html`, { timeout: 3000 });
+  if (readmeRes?.ok) {
+    const readmeBody = await readmeRes.text().catch(() => "");
+    const isRealReadme = /wordpress/i.test(readmeBody) && /<html/i.test(readmeBody);
+    if (isRealReadme) {
+      checks.push({
+        id: "wp-readme",
+        category: "wordpress",
+        name: "readme.html accessible",
+        status: "warn",
+        severity: "medium",
+        description: "Le fichier readme.html WordPress est accessible. Il peut révéler la version installée.",
+        value: `${origin}/readme.html`,
+        recommendation: `Supprimez ou bloquez l'accès :\n\n# .htaccess\n<Files readme.html>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n# Ou Nginx\nlocation = /readme.html { deny all; }`,
+      });
+    }
+  }
+
+  // ── XML-RPC ──
+  const xmlrpcRes = await safeFetch(`${origin}/xmlrpc.php`, { method: "POST", timeout: 3000 });
+  if (xmlrpcRes?.ok) {
+    const xmlrpcBody = await xmlrpcRes.text().catch(() => "");
+    if (/XML-RPC server accepts POST requests only/i.test(xmlrpcBody) || xmlrpcRes.status === 405) {
+      checks.push({
+        id: "wp-xmlrpc",
+        category: "wordpress",
+        name: "XML-RPC actif",
+        status: "fail",
+        severity: "high",
+        description: "XML-RPC est accessible. Vecteur de brute-force, DDoS amplification, et pingback abuse.",
+        value: `${origin}/xmlrpc.php`,
+        recommendation: `Désactivez XML-RPC :\n\n// functions.php\nadd_filter('xmlrpc_enabled', '__return_false');\n\n# .htaccess\n<Files xmlrpc.php>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n# Ou mieux : plugin "Disable XML-RPC"`,
+      });
+    }
+  }
+
+  // ── Author Enumeration (?author=1) ──
+  const authorRes = await safeFetch(`${origin}/?author=1`, { method: "GET", redirect: "manual", timeout: 3000 });
+  if (authorRes) {
+    const location = authorRes.headers.get("location") || "";
+    const exposesAuthor =
+      (authorRes.status >= 300 && authorRes.status < 400 && /\/author\//i.test(location)) ||
+      authorRes.status === 200;
+    if (exposesAuthor) {
+      const authorName = location.match(/\/author\/([^/]+)/)?.[1] || "détecté";
+      checks.push({
+        id: "wp-author-enum",
+        category: "wordpress",
+        name: "Énumération des auteurs",
+        status: "warn",
+        severity: "medium",
+        description: `L'énumération des auteurs est possible (${authorName !== "détecté" ? `auteur: ${authorName}` : "redirection vers /author/"}). Les noms d'utilisateur peuvent être découverts.`,
+        value: `${origin}/?author=1 → ${location || "200 OK"}`,
+        recommendation: `Bloquez l'énumération des auteurs :\n\n# .htaccess\nRewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=([0-9]*)\nRewriteRule .* - [F]\n\n// Ou dans functions.php :\nif (!is_admin() && isset($_GET['author'])) {\n  wp_redirect(home_url(), 301);\n  exit;\n}`,
+      });
+    }
+  }
+
+  // ── REST API Users Endpoint ──
+  const restUsersRes = await safeFetch(`${origin}/wp-json/wp/v2/users`, { timeout: 3000 });
+  if (restUsersRes?.ok) {
+    const usersBody = await restUsersRes.text().catch(() => "");
+    if (/^\s*\[[\s\S]*"slug"\s*:/i.test(usersBody.substring(0, 5000))) {
+      try {
+        const users = JSON.parse(usersBody);
+        const slugs = Array.isArray(users) ? users.map((u: { slug: string }) => u.slug).slice(0, 5) : [];
+        checks.push({
+          id: "wp-rest-users",
+          category: "wordpress",
+          name: "API REST — Utilisateurs exposés",
+          status: "fail",
+          severity: "high",
+          description: `L'API REST WordPress expose les utilisateurs publiquement.${slugs.length > 0 ? ` Utilisateurs trouvés: ${slugs.join(", ")}` : ""}`,
+          value: `${origin}/wp-json/wp/v2/users`,
+          recommendation: `Bloquez l'API REST pour les non-authentifiés :\n\n// functions.php\nadd_filter('rest_authentication_errors', function($result) {\n  if (!is_user_logged_in()) {\n    return new WP_Error('rest_forbidden', 'REST API restricted.', ['status' => 401]);\n  }\n  return $result;\n});\n\n// Ou plugin : "Disable REST API"`,
+        });
+      } catch {
+        // Not valid JSON
+      }
+    }
+  }
+
+  // ── REST API open (/wp-json/) ──
+  const restRes = await safeFetch(`${origin}/wp-json/`, { timeout: 3000 });
+  if (restRes?.ok) {
+    const restBody = await restRes.text().catch(() => "");
+    if (restBody.includes("namespaces") && restBody.includes("wp/v2")) {
+      checks.push({
+        id: "wp-rest-api",
+        category: "wordpress",
+        name: "API REST ouverte",
+        status: "info",
+        description: "L'API REST WordPress est accessible. Vérifiez que seuls les endpoints nécessaires sont exposés.",
+        value: `${origin}/wp-json/`,
+        recommendation: `Restreignez les endpoints sensibles. Désactivez les routes inutiles :\n\nadd_filter('rest_endpoints', function($endpoints) {\n  unset($endpoints['/wp/v2/users']);\n  unset($endpoints['/wp/v2/users/(?P<id>[\\\\d]+)']);\n  return $endpoints;\n});`,
+      });
+    }
+  }
+
+  // ── debug.log exposure ──
+  const debugLogPaths = ["/wp-content/debug.log", "/debug.log"];
+  for (const path of debugLogPaths) {
+    const debugRes = await safeFetch(`${origin}${path}`, { timeout: 3000 });
+    if (debugRes?.ok) {
+      const debugBody = await debugRes.text().catch(() => "");
+      const contentType = debugRes.headers.get("content-type") || "";
+      if (!contentType.includes("text/html") && (debugBody.includes("PHP") || debugBody.includes("Warning") || debugBody.includes("Fatal error") || debugBody.includes("Stack trace"))) {
+        checks.push({
+          id: "wp-debug-log",
+          category: "wordpress",
+          name: "debug.log exposé",
+          status: "fail",
+          severity: "critical",
+          description: `Le fichier ${path} est accessible publiquement ! Il contient des erreurs PHP, chemins serveur, et potentiellement des données sensibles.`,
+          value: `${origin}${path}`,
+          recommendation: `Bloquez immédiatement l'accès :\n\n# .htaccess\n<Files debug.log>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n// Désactivez le debug en production :\n// wp-config.php\ndefine('WP_DEBUG', false);\ndefine('WP_DEBUG_LOG', false);`,
+        });
+        break;
+      }
+    }
+  }
+
+  // ── wp-config.php backup files ──
+  const wpConfigBackups = ["/wp-config.php.bak", "/wp-config.php.old", "/wp-config.php~", "/wp-config.php.save", "/wp-config.txt"];
+  const wpConfigResults = await Promise.all(
+    wpConfigBackups.map(async (path) => {
+      const res = await safeFetch(`${origin}${path}`, { timeout: 3000 });
+      if (res?.ok) {
+        const body = await res.text().catch(() => "");
+        const contentType = res.headers.get("content-type") || "";
+        if (!contentType.includes("text/html") && (body.includes("DB_NAME") || body.includes("DB_PASSWORD") || body.includes("table_prefix"))) {
+          return path;
+        }
+      }
+      return null;
+    })
+  );
+  const exposedConfigs = wpConfigResults.filter(Boolean);
+  if (exposedConfigs.length > 0) {
+    checks.push({
+      id: "wp-config-backup",
+      category: "wordpress",
+      name: "Backup wp-config.php exposé",
+      status: "fail",
+      severity: "critical",
+      description: `Fichier(s) de backup wp-config.php accessible(s) ! Contient les identifiants de base de données.`,
+      value: exposedConfigs.join(", "),
+      recommendation: `Supprimez ces fichiers IMMÉDIATEMENT et bloquez l'accès :\n\n# .htaccess\n<FilesMatch "wp-config\\.php.*">\n  Order Allow,Deny\n  Deny from all\n</FilesMatch>`,
+    });
+  }
+
+  // ── Login page protection ──
+  const loginRes = await safeFetch(`${origin}/wp-login.php`, { method: "GET", redirect: "follow", timeout: 5000 });
+  if (loginRes?.ok) {
+    const loginBody = await loginRes.text().catch(() => "");
+    if (/name="log"[\s\S]*name="pwd"|wp-login\.php\?action=/i.test(loginBody)) {
+      checks.push({
+        id: "wp-login",
+        category: "wordpress",
+        name: "Page de connexion WordPress",
+        status: "warn",
+        severity: "medium",
+        description: "La page wp-login.php est accessible à l'URL par défaut. Cible privilégiée pour les attaques brute-force.",
+        value: `${origin}/wp-login.php`,
+        recommendation: `Protégez la page de connexion :\n\n1. Déplacez l'URL : plugin "WPS Hide Login"\n2. Limitez les tentatives : plugin "Limit Login Attempts Reloaded"\n3. Ajoutez un captcha : plugin "reCaptcha by BestWebSoft"\n4. IP whitelisting :\n\n# .htaccess\n<Files wp-login.php>\n  Order Deny,Allow\n  Deny from all\n  Allow from YOUR_IP\n</Files>`,
+      });
+    }
+  }
+
+  // ── Plugins & Theme Version Detection with CVE references ──
+  const pluginMatches = html.match(/wp-content\/plugins\/([^/'"?]+)(?:\/[^'"?]*?ver(?:sion)?[=:]\s*([\d.]+))?/gi) || [];
+  // Theme detection (for informational purposes)
+
+  // Extract unique plugins with versions
+  const detectedPlugins: { name: string; version?: string }[] = [];
+  const pluginNames = new Set<string>();
+  for (const match of pluginMatches) {
+    const parts = match.match(/plugins\/([^/'"?]+)/i);
+    if (parts?.[1] && !pluginNames.has(parts[1])) {
+      pluginNames.add(parts[1]);
+      const verMatch = match.match(/ver(?:sion)?[=:]\s*([\d.]+)/i);
+      detectedPlugins.push({ name: parts[1], version: verMatch?.[1] });
+    }
+  }
+
+  // Known vulnerable plugins/versions (common CVEs)
+  const knownVulnerable: Record<string, { maxSafe: string; cve: string; desc: string }[]> = {
+    "contact-form-7": [{ maxSafe: "5.3.2", cve: "CVE-2020-35489", desc: "Unrestricted file upload" }],
+    "elementor": [{ maxSafe: "3.6.3", cve: "CVE-2022-29455", desc: "Reflected XSS" }],
+    "wp-file-manager": [{ maxSafe: "6.8", cve: "CVE-2020-25213", desc: "Remote code execution" }],
+    "nextgen-gallery": [{ maxSafe: "3.5.0", cve: "CVE-2020-35942", desc: "CSRF + RCE" }],
+    "really-simple-ssl": [{ maxSafe: "9.0.0", cve: "CVE-2023-49583", desc: "Authentication bypass" }],
+    "all-in-one-seo-pack": [{ maxSafe: "4.1.5.3", cve: "CVE-2021-25036", desc: "Authenticated SQL Injection" }],
+    "wpforms-lite": [{ maxSafe: "1.6.7.1", cve: "CVE-2022-0764", desc: "Stored XSS" }],
+    "yoast-seo": [{ maxSafe: "15.4", cve: "CVE-2021-25118", desc: "Authenticated Stored XSS" }],
+    "wordfence": [{ maxSafe: "7.5.8", cve: "CVE-2022-0135", desc: "Authenticated Stored XSS" }],
+    "updraftplus": [{ maxSafe: "1.22.3", cve: "CVE-2022-0633", desc: "Backup disclosure" }],
+    "duplicator": [{ maxSafe: "1.3.26", cve: "CVE-2020-11738", desc: "Arbitrary file download" }],
+    "revslider": [{ maxSafe: "4.2", cve: "CVE-2014-9734", desc: "Arbitrary file download" }],
+    "wp-super-cache": [{ maxSafe: "1.7.3", cve: "CVE-2021-24209", desc: "Authenticated RCE" }],
+    "woocommerce": [{ maxSafe: "5.5.0", cve: "CVE-2021-32789", desc: "SQL Injection" }],
+    "jetpack": [{ maxSafe: "9.8", cve: "CVE-2021-24374", desc: "Information Disclosure" }],
+  };
+
+  function versionCompare(a: string, b: string): number {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const na = pa[i] || 0;
+      const nb = pb[i] || 0;
+      if (na > nb) return 1;
+      if (na < nb) return -1;
+    }
+    return 0;
+  }
+
+  const vulnerableFound: string[] = [];
+  for (const plugin of detectedPlugins) {
+    const vulns = knownVulnerable[plugin.name];
+    if (vulns && plugin.version) {
+      for (const vuln of vulns) {
+        if (versionCompare(plugin.version, vuln.maxSafe) <= 0) {
+          vulnerableFound.push(`${plugin.name} v${plugin.version} (${vuln.cve}: ${vuln.desc})`);
+        }
+      }
+    }
+  }
+
+  if (detectedPlugins.length > 0) {
+    checks.push({
+      id: "wp-plugins",
+      category: "wordpress",
+      name: "Plugins détectés",
+      status: vulnerableFound.length > 0 ? "fail" : "info",
+      severity: vulnerableFound.length > 0 ? "high" : undefined,
+      description: vulnerableFound.length > 0
+        ? `${detectedPlugins.length} plugin(s) détecté(s), dont ${vulnerableFound.length} potentiellement vulnérable(s).`
+        : `${detectedPlugins.length} plugin(s) détecté(s). Aucune vulnérabilité connue identifiée.`,
+      value: vulnerableFound.length > 0
+        ? vulnerableFound.join("\n")
+        : detectedPlugins.map((p) => `${p.name}${p.version ? ` v${p.version}` : ""}`).join(", "),
+      recommendation: vulnerableFound.length > 0
+        ? "Mettez à jour immédiatement les plugins vulnérables. Utilisez WPScan pour un scan complet : wpscan --url votre-site.com"
+        : "Maintenez tous les plugins à jour. Supprimez les plugins inactifs.",
+    });
+  }
+
+  // ── Overall WP Security Summary ──
+  const wpFails = checks.filter((c) => c.status === "fail").length;
+  const wpWarns = checks.filter((c) => c.status === "warn").length;
+  if (wpFails === 0 && wpWarns === 0) {
+    checks.push({
+      id: "wp-summary",
+      category: "wordpress",
+      name: "Résumé WordPress",
+      status: "pass",
+      description: "Aucune vulnérabilité WordPress spécifique détectée. Bon niveau de sécurisation.",
+    });
+  }
+
+  return checks;
+}
+
+// =============================================================================
 // PERFORMANCE
 // =============================================================================
 
@@ -1552,6 +1860,7 @@ const categoryLabelMap: Record<string, string> = {
   rgpd: "RGPD / Compliance",
   incident: "Monitoring & Réponse",
   performance: "Performance",
+  wordpress: "WordPress Security",
 };
 
 function scoreFromChecks(checks: AuditCheck[]): { score: number; grade: string } {
@@ -1664,12 +1973,13 @@ export async function POST(request: NextRequest) {
     const headers = response.headers;
 
     // Run all checks in parallel where possible
-    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks] = await Promise.all([
+    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks, wpChecks] = await Promise.all([
       checkSSL(targetUrl, isHttps),
       checkOWASP(targetUrl, html),
       checkInfrastructure(targetUrl, headers),
       checkIncidentResponse(targetUrl, headers, html),
       checkRGPD(html, targetUrl),
+      checkWordPress(targetUrl, html),
     ]);
 
     const allChecks: AuditCheck[] = [
@@ -1683,6 +1993,7 @@ export async function POST(request: NextRequest) {
       ...checkXSSVectors(html),
       ...incidentChecks,
       ...checkPerformance(headers, html, responseTime),
+      ...wpChecks,
     ];
 
     const technologies = detectTechnologies(headers, html);

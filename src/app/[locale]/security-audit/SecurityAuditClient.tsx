@@ -31,6 +31,7 @@ import {
   Copy,
   Check,
   Download,
+  Blocks,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,7 @@ const categoryLabels: Record<string, { label: string; icon: typeof Shield }> = {
   rgpd: { label: "RGPD / Compliance", icon: Scale },
   incident: { label: "Incident Response & Monitoring", icon: Siren },
   performance: { label: "Performance", icon: Gauge },
+  wordpress: { label: "WordPress Security", icon: Blocks },
   misc: { label: "Divers", icon: Globe },
 };
 
@@ -198,15 +200,21 @@ function CheckCard({ check }: { check: AuditCheck }) {
           {check.value && (
             <div>
               <p className="text-xs text-muted-foreground mb-1">Valeur :</p>
-              <code className="text-xs bg-muted/50 px-2 py-1 rounded block break-all">
+              <pre className="text-xs bg-muted/50 px-2 py-1 rounded block break-all whitespace-pre-wrap overflow-x-auto">
                 {check.value}
-              </code>
+              </pre>
             </div>
           )}
           {check.recommendation && (
             <div>
               <p className="text-xs text-muted-foreground mb-1">Recommandation :</p>
-              <p className="text-xs text-primary">{check.recommendation}</p>
+              {check.recommendation.includes("\n") ? (
+                <pre className="text-xs text-primary bg-muted/30 px-3 py-2 rounded-lg whitespace-pre-wrap overflow-x-auto font-mono">
+                  {check.recommendation}
+                </pre>
+              ) : (
+                <p className="text-xs text-primary">{check.recommendation}</p>
+              )}
             </div>
           )}
         </div>
