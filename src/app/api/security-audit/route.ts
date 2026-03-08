@@ -168,7 +168,9 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
     if (csp.includes("'unsafe-eval'")) issues.push("unsafe-eval");
     if (csp.includes("'unsafe-inline'") && csp.includes("script-src")) issues.push("unsafe-inline dans script-src");
     if (csp.includes("* ") || /\s\*\s/.test(csp) || csp.includes("*;")) issues.push("wildcard (*)");
-    if (!csp.includes("frame-ancestors")) issues.push("frame-ancestors absent");
+    const hasFrameAncestors = csp.includes("frame-ancestors");
+    const hasXFrameOptions = headers.has("x-frame-options");
+    if (!hasFrameAncestors && !hasXFrameOptions) issues.push("frame-ancestors absent");
 
     checks.push({
       id: "csp",
@@ -767,11 +769,10 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
     id: "waf",
     category: "infra",
     name: "Pare-feu applicatif (WAF)",
-    status: wafDetected ? "pass" : "warn",
-    severity: !wafDetected ? "medium" : undefined,
+    status: wafDetected ? "pass" : "info",
     description: wafDetected
       ? `WAF détecté : ${wafDetected}. Le site est protégé contre les attaques web courantes.`
-      : "Aucun WAF détecté. Le site pourrait être vulnérable aux attaques automatisées.",
+      : "Aucun WAF détecté dans les en-têtes. Vérification non concluante (certains WAF restent invisibles).",
     value: wafDetected || undefined,
     recommendation: !wafDetected
       ? "Mettez en place un WAF (Cloudflare, Sucuri, ModSecurity) pour filtrer le trafic malveillant."
@@ -866,11 +867,10 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
         id: "dnssec",
         category: "infra",
         name: "DNSSEC",
-        status: hasDNSSEC ? "pass" : "warn",
-        severity: !hasDNSSEC ? "low" : undefined,
+        status: hasDNSSEC ? "pass" : "info",
         description: hasDNSSEC
           ? "DNSSEC est activé. Les réponses DNS sont authentifiées."
-          : "DNSSEC n'est pas activé. Les réponses DNS ne sont pas signées cryptographiquement.",
+          : "DNSSEC n'est pas activé. Bonnes pratiques recommandées, mais ce n'est pas bloquant pour tous les sites.",
         recommendation: !hasDNSSEC
           ? "Activez DNSSEC chez votre registrar pour protéger contre le DNS spoofing."
           : undefined,
@@ -1002,12 +1002,14 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
 
   // Check if tracking cookies are set without consent
   const hasTracking =
-    lower.includes("google-analytics") ||
-    lower.includes("gtag") ||
-    lower.includes("facebook") ||
-    lower.includes("fbq(") ||
-    lower.includes("hotjar") ||
-    lower.includes("hubspot");
+    /googletagmanager\.com\/gtm\.js/i.test(html) ||
+    /googletagmanager\.com\/gtag\/js/i.test(html) ||
+    /google-analytics\.com/i.test(html) ||
+    /gtag\s*\(/i.test(html) ||
+    /connect\.facebook\.net/i.test(html) ||
+    /fbq\s*\(/i.test(html) ||
+    /static\.hotjar\.com|script\.hotjar\.com/i.test(html) ||
+    /js\.hs-scripts\.com/i.test(html);
 
   if (hasTracking && !hasCookieBanner) {
     checks.push({
@@ -1351,7 +1353,12 @@ function checkXSSVectors(html: string): AuditCheck[] {
 
   // Forms
   const forms = html.match(/<form[^>]*>/gi) || [];
-  if (forms.length > 0) {
+  const mutableForms = forms.filter((f) => {
+    const methodMatch = f.match(/method\s*=\s*["']?([a-z]+)/i);
+    const method = (methodMatch?.[1] || "get").toLowerCase();
+    return method !== "get";
+  });
+  if (mutableForms.length > 0) {
     const hasCSRFToken = html.includes("csrf") || html.includes("_token") || html.includes("authenticity_token");
     checks.push({
       id: "csrf",
@@ -1360,8 +1367,8 @@ function checkXSSVectors(html: string): AuditCheck[] {
       status: hasCSRFToken ? "pass" : "warn",
       severity: !hasCSRFToken ? "high" : undefined,
       description: hasCSRFToken
-        ? `${forms.length} formulaire(s) avec protection CSRF détectée.`
-        : `${forms.length} formulaire(s) sans token CSRF apparent. Risque d'attaque Cross-Site Request Forgery.`,
+        ? `${mutableForms.length} formulaire(s) mutable(s) avec protection CSRF détectée.`
+        : `${mutableForms.length} formulaire(s) mutable(s) sans token CSRF apparent. Risque d'attaque Cross-Site Request Forgery.`,
       recommendation: !hasCSRFToken
         ? "Ajoutez un token CSRF unique à chaque formulaire et validez-le côté serveur."
         : undefined,
