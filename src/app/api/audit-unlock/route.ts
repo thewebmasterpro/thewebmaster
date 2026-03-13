@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Resend } from "resend";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { verifyCsrf } from "@/lib/csrf";
 import { insertAuditLead } from "@/lib/db";
@@ -92,6 +91,7 @@ export async function POST(request: NextRequest) {
     let emailSent = false;
     if (process.env.RESEND_API_KEY) {
       try {
+        const { Resend } = await import("resend");
         const resend = new Resend(process.env.RESEND_API_KEY);
 
         const subject = getAuditEmailSubject({
