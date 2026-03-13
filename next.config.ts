@@ -98,9 +98,6 @@ const nextConfig: NextConfig = {
   // Recommended: strict mode for better error catching
   reactStrictMode: true,
 
-  // Native Node.js modules must not be bundled by webpack
-  serverExternalPackages: ["better-sqlite3"],
-
   // Experimental features
   experimental: {
     // Enable React compiler when stable
