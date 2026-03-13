@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function PerformanceAuditPage() {
-  return <PerformanceAuditClient />;
+export default async function PerformanceAuditPage({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale } = await params;
+  return <PerformanceAuditClient locale={locale} />;
 }

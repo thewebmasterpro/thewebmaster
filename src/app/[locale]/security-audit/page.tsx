@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function SecurityAuditPage() {
-  return <SecurityAuditClient />;
+export default async function SecurityAuditPage({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale } = await params;
+  return <SecurityAuditClient locale={locale} />;
 }

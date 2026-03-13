@@ -37,6 +37,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { jsPDF } from "jspdf";
+import { translations, type PerfTranslations, getDateLocale } from "./translations";
+import UnlockGate from "@/components/UnlockGate";
 
 interface PerfCheck {
   id: string;
@@ -88,29 +90,35 @@ interface PerfAuditResult {
   };
 }
 
-const categoryLabels: Record<string, { label: string; icon: typeof Gauge }> = {
-  cwv: { label: "Core Web Vitals", icon: Activity },
-  server: { label: "Serveur & Reseau", icon: Server },
-  resources: { label: "Ressources & Chargement", icon: HardDrive },
-  images: { label: "Optimisation des Images", icon: Image },
-  fonts: { label: "Polices & Typographie", icon: Type },
-  rendering: { label: "Rendu & DOM", icon: Layers },
-  optimization: { label: "Optimisation & Hints", icon: Rocket },
-};
+function getCategoryLabels(t: PerfTranslations) {
+  return {
+    cwv: { label: t.catCwv, icon: Activity },
+    server: { label: t.catServer, icon: Server },
+    resources: { label: t.catResources, icon: HardDrive },
+    images: { label: t.catImages, icon: Image },
+    fonts: { label: t.catFonts, icon: Type },
+    rendering: { label: t.catRendering, icon: Layers },
+    optimization: { label: t.catOptimization, icon: Rocket },
+  } as Record<string, { label: string; icon: typeof Gauge }>;
+}
 
-const statusConfig = {
-  pass: { icon: CheckCircle2, color: "text-green-500", bg: "bg-green-500/10", label: "OK" },
-  warn: { icon: AlertTriangle, color: "text-yellow-500", bg: "bg-yellow-500/10", label: "Attention" },
-  fail: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", label: "Critique" },
-  info: { icon: Info, color: "text-blue-500", bg: "bg-blue-500/10", label: "Info" },
-};
+function getStatusConfig(t: PerfTranslations) {
+  return {
+    pass: { icon: CheckCircle2, color: "text-green-500", bg: "bg-green-500/10", label: t.statusOk },
+    warn: { icon: AlertTriangle, color: "text-yellow-500", bg: "bg-yellow-500/10", label: t.statusWarn },
+    fail: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", label: t.statusFail },
+    info: { icon: Info, color: "text-blue-500", bg: "bg-blue-500/10", label: t.statusInfo },
+  };
+}
 
-const severityConfig: Record<string, { label: string; color: string }> = {
-  critical: { label: "CRITIQUE", color: "text-red-600 bg-red-500/15 border-red-500/30" },
-  high: { label: "ELEVE", color: "text-orange-500 bg-orange-500/15 border-orange-500/30" },
-  medium: { label: "MOYEN", color: "text-yellow-500 bg-yellow-500/15 border-yellow-500/30" },
-  low: { label: "FAIBLE", color: "text-blue-400 bg-blue-400/15 border-blue-400/30" },
-};
+function getSeverityConfig(t: PerfTranslations) {
+  return {
+    critical: { label: t.sevCritical, color: "text-red-600 bg-red-500/15 border-red-500/30" },
+    high: { label: t.sevHigh, color: "text-orange-500 bg-orange-500/15 border-orange-500/30" },
+    medium: { label: t.sevMedium, color: "text-yellow-500 bg-yellow-500/15 border-yellow-500/30" },
+    low: { label: t.sevLow, color: "text-blue-400 bg-blue-400/15 border-blue-400/30" },
+  } as Record<string, { label: string; color: string }>;
+}
 
 const gradeColors: Record<string, string> = {
   "A+": "from-green-500 to-emerald-600",
@@ -159,11 +167,13 @@ function ScoreRing({ score, grade }: { score: number; grade: string }) {
   );
 }
 
-function CheckCard({ check }: { check: PerfCheck }) {
+function CheckCard({ check, t }: { check: PerfCheck; t: PerfTranslations }) {
   const [expanded, setExpanded] = useState(false);
-  const config = statusConfig[check.status];
+  const statusCfg = getStatusConfig(t);
+  const config = statusCfg[check.status];
   const StatusIcon = config.icon;
-  const sev = check.severity && check.severity !== "info" ? severityConfig[check.severity] : null;
+  const sevCfg = getSeverityConfig(t);
+  const sev = check.severity && check.severity !== "info" ? sevCfg[check.severity] : null;
 
   return (
     <div
@@ -210,7 +220,7 @@ function CheckCard({ check }: { check: PerfCheck }) {
         <div className="px-4 pb-4 space-y-2 border-t border-border/30 pt-3 mx-4 mb-1">
           {check.value && (
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Valeur :</p>
+              <p className="text-xs text-muted-foreground mb-1">{t.valueLabel}</p>
               <code className="text-xs bg-muted/50 px-2 py-1 rounded block break-all">
                 {check.value}
               </code>
@@ -218,7 +228,7 @@ function CheckCard({ check }: { check: PerfCheck }) {
           )}
           {check.recommendation && (
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Recommandation :</p>
+              <p className="text-xs text-muted-foreground mb-1">{t.recommendationLabel}</p>
               <p className="text-xs text-primary">{check.recommendation}</p>
             </div>
           )}
@@ -228,41 +238,41 @@ function CheckCard({ check }: { check: PerfCheck }) {
   );
 }
 
-function QuickStats({ result }: { result: PerfAuditResult }) {
+function QuickStats({ result, t }: { result: PerfAuditResult; t: PerfTranslations }) {
   const stats = [
     {
       icon: Timer,
-      label: "TTFB",
+      label: t.ttfb,
       value: `${result.responseTime}ms`,
       color: result.responseTime < 600 ? "text-green-500" : result.responseTime < 1500 ? "text-yellow-500" : "text-red-500",
     },
     {
       icon: FileText,
-      label: "HTML",
+      label: t.html,
       value: `${result.htmlSize} KB`,
       color: result.htmlSize < 100 ? "text-green-500" : result.htmlSize < 300 ? "text-yellow-500" : "text-red-500",
     },
     {
       icon: Zap,
-      label: "Scripts",
+      label: t.scripts,
       value: `${result.resources.totalScripts}`,
       color: result.resources.totalScripts <= 10 ? "text-green-500" : "text-yellow-500",
     },
     {
       icon: Layers,
-      label: "CSS",
+      label: t.css,
       value: `${result.resources.totalStylesheets}`,
       color: result.resources.totalStylesheets <= 5 ? "text-green-500" : "text-yellow-500",
     },
     {
       icon: Image,
-      label: "Images",
+      label: t.images,
       value: `${result.resources.totalImages}`,
       color: "text-blue-500",
     },
     {
       icon: Network,
-      label: "Tiers",
+      label: t.thirdParty,
       value: `${result.thirdPartyDomains.length}`,
       color: result.thirdPartyDomains.length <= 5 ? "text-green-500" : "text-yellow-500",
     },
@@ -281,21 +291,21 @@ function QuickStats({ result }: { result: PerfAuditResult }) {
   );
 }
 
-function ResourceBreakdown({ resources }: { resources: ResourceStats }) {
+function ResourceBreakdown({ resources, t }: { resources: ResourceStats; t: PerfTranslations }) {
   const items = [
-    { label: "Scripts externes", value: resources.totalScripts, sub: `${resources.syncScripts} sync, ${resources.asyncScripts} async, ${resources.deferScripts} defer` },
-    { label: "Scripts inline", value: resources.inlineScripts },
-    { label: "Feuilles de styles", value: resources.totalStylesheets },
-    { label: "Styles inline", value: resources.inlineStyles },
-    { label: "Images totales", value: resources.totalImages, sub: `${resources.lazyImages} lazy` },
-    { label: "Polices", value: resources.totalFonts, sub: `${resources.preloadedFonts} preloadee(s)` },
+    { label: t.externalScripts, value: resources.totalScripts, sub: `${resources.syncScripts} sync, ${resources.asyncScripts} async, ${resources.deferScripts} defer` },
+    { label: t.inlineScripts, value: resources.inlineScripts },
+    { label: t.stylesheets, value: resources.totalStylesheets },
+    { label: t.inlineStyles, value: resources.inlineStyles },
+    { label: t.totalImages, value: resources.totalImages, sub: `${resources.lazyImages} ${t.lazy}` },
+    { label: t.fonts, value: resources.totalFonts, sub: `${resources.preloadedFonts} ${t.preloaded}` },
   ];
 
   return (
     <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
       <div className="flex items-center gap-2 mb-4">
         <HardDrive className="w-5 h-5 text-primary" />
-        <h3 className="text-lg font-semibold">Inventaire des ressources</h3>
+        <h3 className="text-lg font-semibold">{t.resourceInventory}</h3>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         {items.map((item) => (
@@ -310,18 +320,18 @@ function ResourceBreakdown({ resources }: { resources: ResourceStats }) {
   );
 }
 
-function EstimatedLoadTimes({ times }: { times: PerfAuditResult["estimatedLoadTime"] }) {
+function EstimatedLoadTimes({ times, t }: { times: PerfAuditResult["estimatedLoadTime"]; t: PerfTranslations }) {
   const items = [
-    { icon: Cable, label: "Cable / Fibre", value: times.cable, color: "text-green-500" },
-    { icon: Wifi, label: "3G rapide", value: times.fast3g, color: "text-yellow-500" },
-    { icon: WifiOff, label: "3G lente", value: times.slow3g, color: "text-red-500" },
+    { icon: Cable, label: t.cable, value: times.cable, color: "text-green-500" },
+    { icon: Wifi, label: t.fast3g, value: times.fast3g, color: "text-yellow-500" },
+    { icon: WifiOff, label: t.slow3g, value: times.slow3g, color: "text-red-500" },
   ];
 
   return (
     <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
       <div className="flex items-center gap-2 mb-4">
         <MonitorSmartphone className="w-5 h-5 text-primary" />
-        <h3 className="text-lg font-semibold">Temps de chargement estime</h3>
+        <h3 className="text-lg font-semibold">{t.estimatedLoadTime}</h3>
       </div>
       <div className="grid grid-cols-3 gap-3">
         {items.map((item) => (
@@ -336,19 +346,19 @@ function EstimatedLoadTimes({ times }: { times: PerfAuditResult["estimatedLoadTi
   );
 }
 
-function ServerInfo({ info }: { info: PerfAuditResult["serverInfo"] }) {
+function ServerInfo({ info, t }: { info: PerfAuditResult["serverInfo"]; t: PerfTranslations }) {
   const items = [
-    { label: "Protocole", value: info.protocol || "Inconnu" },
-    { label: "Serveur", value: info.server || "Masque" },
-    { label: "Powered By", value: info.poweredBy || "Masque" },
-    { label: "Compression", value: info.compression || "Aucune" },
+    { label: t.protocol, value: info.protocol || t.unknown },
+    { label: t.server, value: info.server || t.hidden },
+    { label: t.poweredBy, value: info.poweredBy || t.hidden },
+    { label: t.compression, value: info.compression || t.none },
   ];
 
   return (
     <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
       <div className="flex items-center gap-2 mb-4">
         <Server className="w-5 h-5 text-primary" />
-        <h3 className="text-lg font-semibold">Informations serveur</h3>
+        <h3 className="text-lg font-semibold">{t.serverInfo}</h3>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {items.map((item) => (
@@ -375,7 +385,7 @@ function generateReportText(result: PerfAuditResult) {
   return { quickWins, warnings, improvements };
 }
 
-function generatePDF(result: PerfAuditResult) {
+function generatePDF(result: PerfAuditResult, t: PerfTranslations, dateLocale: string) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
@@ -387,10 +397,10 @@ function generatePDF(result: PerfAuditResult) {
   const hostname = (() => {
     try { return new URL(result.url).hostname; } catch { return result.url; }
   })();
-  const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+  const date = new Date(result.timestamp).toLocaleDateString(dateLocale, {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
   });
-  const time = new Date(result.timestamp).toLocaleTimeString("fr-BE", {
+  const time = new Date(result.timestamp).toLocaleTimeString(dateLocale, {
     hour: "2-digit", minute: "2-digit",
   });
 
@@ -422,7 +432,7 @@ function generatePDF(result: PerfAuditResult) {
   doc.setFontSize(22);
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
-  doc.text("RAPPORT D'AUDIT PERFORMANCE", marginL, 18);
+  doc.text(t.pdfTitle, marginL, 18);
 
   doc.setFontSize(12);
   doc.setTextColor(180, 180, 255);
@@ -448,7 +458,7 @@ function generatePDF(result: PerfAuditResult) {
   doc.setFontSize(14);
   doc.setTextColor(17, 24, 39);
   doc.setFont("helvetica", "bold");
-  doc.text("1. Resume executif", marginL, y);
+  doc.text(t.pdfSummary, marginL, y);
   y += 8;
   drawLine(y);
   y += 6;
@@ -458,12 +468,12 @@ function generatePDF(result: PerfAuditResult) {
   const fails = result.checks.filter((c) => c.status === "fail").length;
 
   const summaryItems = [
-    ["URL analysee", result.url],
-    ["Score global", `${result.score}/100 (${result.grade})`],
+    [t.pdfUrlAnalyzed, result.url],
+    [t.pdfGlobalScore, `${result.score}/100 (${result.grade})`],
     ["TTFB", `${result.responseTime}ms`],
-    ["Taille HTML", `${result.htmlSize} KB`],
+    [t.pdfHtmlSize, `${result.htmlSize} KB`],
     ["Compression", result.serverInfo.compression || "Aucune"],
-    ["Resultats", `${passes} reussis | ${warns} alertes | ${fails} critiques`],
+    [t.pdfResults, `${passes} ${t.pdfPassed} | ${warns} ${t.pdfWarnings} | ${fails} ${t.pdfCritical}`],
   ];
   for (const [label, value] of summaryItems) {
     doc.setFontSize(9);
@@ -482,18 +492,18 @@ function generatePDF(result: PerfAuditResult) {
   doc.setFontSize(14);
   doc.setTextColor(17, 24, 39);
   doc.setFont("helvetica", "bold");
-  doc.text("2. Ressources", marginL, y);
+  doc.text(t.pdfResources, marginL, y);
   y += 8;
   drawLine(y);
   y += 6;
 
   const resItems = [
-    ["Scripts externes", `${result.resources.totalScripts} (${result.resources.syncScripts} sync, ${result.resources.asyncScripts} async, ${result.resources.deferScripts} defer)`],
-    ["Scripts inline", `${result.resources.inlineScripts}`],
-    ["Feuilles de styles", `${result.resources.totalStylesheets}`],
-    ["Images", `${result.resources.totalImages} (${result.resources.lazyImages} lazy)`],
-    ["Polices", `${result.resources.totalFonts} (${result.resources.preloadedFonts} preloadee(s))`],
-    ["Domaines tiers", `${result.thirdPartyDomains.length}`],
+    [t.externalScripts, `${result.resources.totalScripts} (${result.resources.syncScripts} sync, ${result.resources.asyncScripts} async, ${result.resources.deferScripts} defer)`],
+    [t.inlineScripts, `${result.resources.inlineScripts}`],
+    [t.stylesheets, `${result.resources.totalStylesheets}`],
+    [t.images, `${result.resources.totalImages} (${result.resources.lazyImages} ${t.lazy})`],
+    [t.fonts, `${result.resources.totalFonts} (${result.resources.preloadedFonts} ${t.preloaded})`],
+    [t.pdfThirdParty, `${result.thirdPartyDomains.length}`],
   ];
   for (const [label, value] of resItems) {
     doc.setFontSize(9);
@@ -512,15 +522,15 @@ function generatePDF(result: PerfAuditResult) {
   doc.setFontSize(14);
   doc.setTextColor(17, 24, 39);
   doc.setFont("helvetica", "bold");
-  doc.text("3. Temps de chargement estimes", marginL, y);
+  doc.text(t.pdfLoadTimes, marginL, y);
   y += 8;
   drawLine(y);
   y += 6;
 
   const loadItems = [
-    ["Cable / Fibre", result.estimatedLoadTime.cable],
-    ["3G rapide", result.estimatedLoadTime.fast3g],
-    ["3G lente", result.estimatedLoadTime.slow3g],
+    [t.cable, result.estimatedLoadTime.cable],
+    [t.fast3g, result.estimatedLoadTime.fast3g],
+    [t.slow3g, result.estimatedLoadTime.slow3g],
   ];
   for (const [label, value] of loadItems) {
     doc.setFontSize(9);
@@ -539,21 +549,21 @@ function generatePDF(result: PerfAuditResult) {
   doc.setFontSize(14);
   doc.setTextColor(17, 24, 39);
   doc.setFont("helvetica", "bold");
-  doc.text("4. Resultats par categorie", marginL, y);
+  doc.text(t.pdfResultsByCategory, marginL, y);
   y += 8;
   drawLine(y);
   y += 6;
 
   const catOrder = ["cwv", "server", "resources", "images", "fonts", "rendering", "optimization"];
-  const catLabelsMap: Record<string, string> = {
-    cwv: "Core Web Vitals",
-    server: "Serveur & Reseau",
-    resources: "Ressources & Chargement",
-    images: "Optimisation des Images",
-    fonts: "Polices & Typographie",
-    rendering: "Rendu & DOM",
-    optimization: "Optimisation & Hints",
-  };
+  const catLabelsMap = {
+    cwv: t.catCwv,
+    server: t.catServer,
+    resources: t.catResources,
+    images: t.catImages,
+    fonts: t.catFonts,
+    rendering: t.catRendering,
+    optimization: t.catOptimization,
+  } as Record<string, string>;
 
   for (const catKey of catOrder) {
     const catChecks = result.checks.filter((c) => c.category === catKey);
@@ -563,7 +573,7 @@ function generatePDF(result: PerfAuditResult) {
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(50, 50, 50);
-    doc.text(`${catLabelsMap[catKey]} (${catChecks.length} verifications)`, marginL + 2, y);
+    doc.text(`${catLabelsMap[catKey]} (${catChecks.length} ${t.verifications})`, marginL + 2, y);
     y += 6;
 
     for (const check of catChecks) {
@@ -606,7 +616,7 @@ function generatePDF(result: PerfAuditResult) {
         checkSpace(4);
         doc.setTextColor(59, 130, 246);
         doc.setFontSize(7.5);
-        const recLines = doc.splitTextToSize(`Recommandation : ${check.recommendation}`, maxW - 17);
+        const recLines = doc.splitTextToSize(`${t.pdfRecommendation} : ${check.recommendation}`, maxW - 17);
         for (const line of recLines) {
           checkSpace(4);
           doc.text(line, marginL + 15, y);
@@ -626,7 +636,7 @@ function generatePDF(result: PerfAuditResult) {
     doc.setFontSize(14);
     doc.setTextColor(239, 68, 68);
     doc.setFont("helvetica", "bold");
-    doc.text("5. Quick Wins - Action immediate", marginL, y);
+    doc.text(t.pdfQuickWins, marginL, y);
     y += 8;
     drawLine(y, [239, 68, 68]);
     y += 6;
@@ -646,7 +656,7 @@ function generatePDF(result: PerfAuditResult) {
     doc.setFontSize(14);
     doc.setTextColor(234, 179, 8);
     doc.setFont("helvetica", "bold");
-    doc.text("6. Ameliorations recommandees", marginL, y);
+    doc.text(t.pdfRecommended, marginL, y);
     y += 8;
     drawLine(y, [234, 179, 8]);
     y += 6;
@@ -666,7 +676,7 @@ function generatePDF(result: PerfAuditResult) {
     doc.setFontSize(14);
     doc.setTextColor(59, 130, 246);
     doc.setFont("helvetica", "bold");
-    doc.text("7. Optimisations mineures", marginL, y);
+    doc.text(t.pdfMinor, marginL, y);
     y += 8;
     drawLine(y, [59, 130, 246]);
     y += 6;
@@ -687,7 +697,7 @@ function generatePDF(result: PerfAuditResult) {
     doc.setFontSize(14);
     doc.setTextColor(17, 24, 39);
     doc.setFont("helvetica", "bold");
-    doc.text("Technologies detectees", marginL, y);
+    doc.text(t.pdfTechDetected, marginL, y);
     y += 8;
     drawLine(y);
     y += 6;
@@ -717,36 +727,36 @@ function generatePDF(result: PerfAuditResult) {
     doc.setTextColor(150, 150, 150);
     doc.setFont("helvetica", "normal");
     doc.text(
-      `Rapport Performance - ${hostname} - ${date} - Page ${i}/${totalPages}`,
+      `${t.reportTitle} - ${hostname} - ${date} - Page ${i}/${totalPages}`,
       marginL,
       H - 10
     );
-    doc.text("The Webmaster - Performance Audit Tool", W - marginR - 55, H - 10);
+    doc.text("The Webmaster - " + t.toolName, W - marginR - 55, H - 10);
   }
 
   doc.save(`perf-audit-${hostname}-${new Date().toISOString().split("T")[0]}.pdf`);
 }
 
-function PerfReport({ result }: { result: PerfAuditResult }) {
+function PerfReport({ result, t, dateLocale }: { result: PerfAuditResult; t: PerfTranslations; dateLocale: string }) {
   const [copied, setCopied] = useState(false);
   const { quickWins, warnings, improvements } = generateReportText(result);
 
-  const reportText = `RAPPORT D'AUDIT PERFORMANCE
+  const reportText = `${t.reportTitle}
 ${"=".repeat(50)}
-Site : ${result.url}
-Date : ${new Date(result.timestamp).toLocaleString("fr-BE")}
-Score : ${result.score}/100 (${result.grade})
+${t.reportSite} : ${result.url}
+Date : ${new Date(result.timestamp).toLocaleString(dateLocale)}
+${t.reportScore} : ${result.score}/100 (${result.grade})
 TTFB : ${result.responseTime}ms
-Taille HTML : ${result.htmlSize} KB
-Compression : ${result.serverInfo.compression || "Aucune"}
+${t.pdfHtmlSize} : ${result.htmlSize} KB
+${t.compression} : ${result.serverInfo.compression || t.none}
 
-RESUME
+${t.reportSummary}
 ------
-- ${result.checks.filter((c) => c.status === "pass").length} tests reussis
-- ${result.checks.filter((c) => c.status === "warn").length} alertes
-- ${result.checks.filter((c) => c.status === "fail").length} problemes critiques
+- ${result.checks.filter((c) => c.status === "pass").length} ${t.reportTestsPassed}
+- ${result.checks.filter((c) => c.status === "warn").length} ${t.reportAlerts}
+- ${result.checks.filter((c) => c.status === "fail").length} ${t.reportCriticalIssues}
 
-RESSOURCES
+${t.reportResources}
 ----------
 Scripts : ${result.resources.totalScripts} externes (${result.resources.syncScripts} sync) + ${result.resources.inlineScripts} inline
 CSS : ${result.resources.totalStylesheets} externes + ${result.resources.inlineStyles} inline
@@ -754,25 +764,25 @@ Images : ${result.resources.totalImages} (${result.resources.lazyImages} lazy)
 Polices : ${result.resources.totalFonts} (${result.resources.preloadedFonts} preloadees)
 Domaines tiers : ${result.thirdPartyDomains.length}
 
-TEMPS DE CHARGEMENT ESTIMES
+${t.reportLoadTimes}
 ----------------------------
 Cable/Fibre : ${result.estimatedLoadTime.cable}
 3G rapide : ${result.estimatedLoadTime.fast3g}
 3G lente : ${result.estimatedLoadTime.slow3g}
 
-${quickWins.length > 0 ? `QUICK WINS (priorite haute)\n${"-".repeat(30)}\n${quickWins.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
-${warnings.length > 0 ? `AMELIORATIONS RECOMMANDEES\n${"-".repeat(30)}\n${warnings.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
-${improvements.length > 0 ? `OPTIMISATIONS MINEURES\n${"-".repeat(30)}\n${improvements.map((c) => `- ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
-TECHNOLOGIES DETECTEES
+${quickWins.length > 0 ? `${t.reportQuickWins}\n${"-".repeat(30)}\n${quickWins.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
+${warnings.length > 0 ? `${t.reportRecommended}\n${"-".repeat(30)}\n${warnings.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
+${improvements.length > 0 ? `${t.reportMinor}\n${"-".repeat(30)}\n${improvements.map((c) => `- ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
+${t.reportTechDetected}
 ${"-".repeat(30)}
-${result.technologies.join(", ") || "Aucune"}
+${result.technologies.join(", ") || t.reportNone}
 
-DOMAINES TIERS
+${t.reportThirdParty}
 ${"-".repeat(30)}
-${result.thirdPartyDomains.join(", ") || "Aucun"}
+${result.thirdPartyDomains.join(", ") || t.reportNoThirdParty}
 
 ---
-Genere par TheWebmaster Performance Audit Tool
+${t.reportGeneratedBy}
 `;
 
   const handleCopy = () => {
@@ -786,16 +796,16 @@ Genere par TheWebmaster Performance Audit Tool
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Gauge className="w-5 h-5 text-primary" />
-          <h3 className="text-lg font-semibold">Recommandations priorisees</h3>
+          <h3 className="text-lg font-semibold">{t.prioritizedRecs}</h3>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2">
             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-            {copied ? "Copie !" : "Copier"}
+            {copied ? t.copied : t.copy}
           </Button>
-          <Button size="sm" onClick={() => generatePDF(result)} className="gap-2">
+          <Button size="sm" onClick={() => generatePDF(result, t, dateLocale)} className="gap-2">
             <Download className="w-4 h-4" />
-            Telecharger PDF
+            {t.downloadPdf}
           </Button>
         </div>
       </div>
@@ -805,7 +815,7 @@ Genere par TheWebmaster Performance Audit Tool
           <div>
             <div className="flex items-center gap-2 mb-3">
               <div className="w-2 h-2 rounded-full bg-red-500" />
-              <h4 className="font-semibold text-sm text-red-500">Quick Wins — Impact fort, action rapide</h4>
+              <h4 className="font-semibold text-sm text-red-500">{t.quickWinsTitle}</h4>
             </div>
             <div className="space-y-2">
               {quickWins.map((c) => (
@@ -825,7 +835,7 @@ Genere par TheWebmaster Performance Audit Tool
           <div>
             <div className="flex items-center gap-2 mb-3">
               <div className="w-2 h-2 rounded-full bg-yellow-500" />
-              <h4 className="font-semibold text-sm text-yellow-500">Ameliorations recommandees</h4>
+              <h4 className="font-semibold text-sm text-yellow-500">{t.recommendedTitle}</h4>
             </div>
             <div className="space-y-2">
               {warnings.map((c) => (
@@ -845,7 +855,7 @@ Genere par TheWebmaster Performance Audit Tool
           <div>
             <div className="flex items-center gap-2 mb-3">
               <div className="w-2 h-2 rounded-full bg-blue-500" />
-              <h4 className="font-semibold text-sm text-blue-500">Optimisations mineures</h4>
+              <h4 className="font-semibold text-sm text-blue-500">{t.minorTitle}</h4>
             </div>
             <div className="space-y-2">
               {improvements.map((c) => (
@@ -864,7 +874,7 @@ Genere par TheWebmaster Performance Audit Tool
         {quickWins.length === 0 && warnings.length === 0 && improvements.length === 0 && (
           <div className="text-center py-6">
             <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">Excellent ! Aucun probleme majeur de performance detecte.</p>
+            <p className="text-sm text-muted-foreground">{t.excellent}</p>
           </div>
         )}
       </div>
@@ -872,11 +882,19 @@ Genere par TheWebmaster Performance Audit Tool
   );
 }
 
-export default function PerformanceAuditClient() {
+export default function PerformanceAuditClient({ locale = "fr" }: { locale?: string }) {
+  const t = translations[locale as keyof typeof translations] || translations.fr;
+  const dateLocale = getDateLocale(locale);
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<PerfAuditResult | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [unlocked, setUnlocked] = useState(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("audit-unlocked-performance") === "true";
+    }
+    return false;
+  });
 
   const handleAudit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -943,11 +961,10 @@ export default function PerformanceAuditClient() {
             <Gauge className="w-8 h-8 text-primary" />
           </div>
           <h1 className="text-3xl md:text-4xl font-bold mb-3">
-            Audit Performance <span className="text-primary">Web</span>
+            {t.title} <span className="text-primary">{t.titleHighlight}</span>
           </h1>
           <p className="text-muted-foreground max-w-xl mx-auto">
-            Analysez les performances d&apos;un site web : Core Web Vitals, ressources, images,
-            polices, rendu DOM et optimisations.
+            {t.subtitle}
           </p>
         </div>
 
@@ -959,7 +976,7 @@ export default function PerformanceAuditClient() {
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="exemple.com"
+                placeholder={t.placeholder}
                 className="w-full h-12 pl-12 pr-4 rounded-xl border bg-card/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                 disabled={status === "loading"}
               />
@@ -968,12 +985,12 @@ export default function PerformanceAuditClient() {
               {status === "loading" ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Analyse...
+                  {t.analyzing}
                 </>
               ) : (
                 <>
                   <Gauge className="w-4 h-4 mr-2" />
-                  Analyser
+                  {t.analyze}
                 </>
               )}
             </Button>
@@ -991,7 +1008,7 @@ export default function PerformanceAuditClient() {
               <Gauge className="absolute inset-0 m-auto w-8 h-8 text-primary" />
             </div>
             <p className="text-muted-foreground animate-pulse">
-              Analyse de performance en cours... Verification des ressources, images, polices et optimisations.
+              {t.loadingText}
             </p>
           </div>
         )}
@@ -1003,19 +1020,20 @@ export default function PerformanceAuditClient() {
               <div className="flex flex-col md:flex-row items-center gap-8">
                 <ScoreRing score={result.score} grade={result.grade} />
                 <div className="flex-1 text-center md:text-left">
-                  <h2 className="text-xl font-bold mb-1">Resultat de l&apos;audit performance</h2>
+                  <h2 className="text-xl font-bold mb-1">{t.resultTitle}</h2>
                   <p className="text-sm text-muted-foreground mb-4 break-all">{result.url}</p>
                   <div className="flex flex-wrap gap-3 justify-center md:justify-start">
                     {summary &&
                       (
                         [
-                          ["pass", summary.pass, "Reussis"],
-                          ["warn", summary.warn, "Alertes"],
-                          ["fail", summary.fail, "Critiques"],
-                          ["info", summary.info, "Infos"],
+                          ["pass", summary.pass, t.passed],
+                          ["warn", summary.warn, t.warnings],
+                          ["fail", summary.fail, t.critical],
+                          ["info", summary.info, t.infos],
                         ] as const
                       ).map(([key, count, label]) => {
-                        const conf = statusConfig[key];
+                        const sc = getStatusConfig(t);
+                        const conf = sc[key];
                         return (
                           <div
                             key={key}
@@ -1032,20 +1050,33 @@ export default function PerformanceAuditClient() {
               </div>
             </div>
 
-            <QuickStats result={result} />
+            {/* Unlock Gate or Full Results */}
+            {!unlocked ? (
+              <UnlockGate
+                t={t}
+                siteUrl={result.url}
+                auditType="performance"
+                score={result.score}
+                grade={result.grade}
+                locale={locale}
+                onUnlocked={() => setUnlocked(true)}
+              />
+            ) : (
+            <>
+            <QuickStats result={result} t={t} />
 
-            <EstimatedLoadTimes times={result.estimatedLoadTime} />
+            <EstimatedLoadTimes times={result.estimatedLoadTime} t={t} />
 
-            <ServerInfo info={result.serverInfo} />
+            <ServerInfo info={result.serverInfo} t={t} />
 
-            <ResourceBreakdown resources={result.resources} />
+            <ResourceBreakdown resources={result.resources} t={t} />
 
             {/* Technologies */}
             {result.technologies.length > 0 && (
               <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
                 <div className="flex items-center gap-2 mb-4">
                   <Cpu className="w-5 h-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Technologies detectees</h3>
+                  <h3 className="text-lg font-semibold">{t.technologiesDetected}</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {result.technologies.map((tech) => (
@@ -1065,7 +1096,7 @@ export default function PerformanceAuditClient() {
               <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
                 <div className="flex items-center gap-2 mb-4">
                   <Network className="w-5 h-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Domaines tiers ({result.thirdPartyDomains.length})</h3>
+                  <h3 className="text-lg font-semibold">{t.thirdPartyDomains} ({result.thirdPartyDomains.length})</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {result.thirdPartyDomains.map((domain) => (
@@ -1085,7 +1116,8 @@ export default function PerformanceAuditClient() {
               ["cwv", "server", "resources", "images", "fonts", "rendering", "optimization"].map((categoryKey) => {
                 const checks = grouped[categoryKey];
                 if (!checks || checks.length === 0) return null;
-                const catInfo = categoryLabels[categoryKey] || {
+                const catLabels = getCategoryLabels(t);
+                const catInfo = catLabels[categoryKey] || {
                   label: categoryKey,
                   icon: Gauge,
                 };
@@ -1096,26 +1128,26 @@ export default function PerformanceAuditClient() {
                       <CatIcon className="w-5 h-5 text-primary" />
                       <h3 className="text-lg font-semibold">{catInfo.label}</h3>
                       <span className="text-xs text-muted-foreground">
-                        ({checks.length} verification{checks.length > 1 ? "s" : ""})
+                        ({checks.length} {checks.length > 1 ? t.verifications : t.verification})
                       </span>
                     </div>
                     <div className="space-y-2">
                       {checks.map((check) => (
-                        <CheckCard key={check.id} check={check} />
+                        <CheckCard key={check.id} check={check} t={t} />
                       ))}
                     </div>
                   </div>
                 );
               })}
 
-            <PerfReport result={result} />
+            <PerfReport result={result} t={t} dateLocale={dateLocale} />
+            </>
+            )}
 
             <div className="p-4 rounded-xl border border-border/30 bg-muted/20 text-center">
               <p className="text-xs text-muted-foreground">
-                Cet outil analyse les informations publiquement accessibles (HTML, headers HTTP, structure des ressources).
-                Les metriques Core Web Vitals sont estimees a partir du HTML statique — pour des mesures reelles, utilisez
-                Google PageSpeed Insights ou Lighthouse.
-                Analyse le {new Date(result.timestamp).toLocaleString("fr-BE")} — TTFB : {result.responseTime}ms
+                {t.disclaimer}
+                {t.analyzedOn} {new Date(result.timestamp).toLocaleString(dateLocale)} — TTFB : {result.responseTime}ms
               </p>
             </div>
           </div>

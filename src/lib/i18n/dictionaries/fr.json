@@ -7,7 +7,11 @@
     "about": "À propos",
     "faq": "FAQ",
     "contact": "Contact",
-    "cta": "Devis gratuit"
+    "cta": "Devis gratuit",
+    "tools": "Outils",
+    "seoAudit": "Audit SEO",
+    "perfAudit": "Audit Performance",
+    "secAudit": "Audit Sécurité"
   },
   "hero": {
     "badge": "Agence Digitale en Belgique",

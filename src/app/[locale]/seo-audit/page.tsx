@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default function SeoAuditPage() {
-  return <SeoAuditClient />;
+export default async function SeoAuditPage({ params }: { params: Promise<{ locale: string }> }) {
+  const { locale } = await params;
+  return <SeoAuditClient locale={locale} />;
 }

@@ -36,6 +36,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import jsPDF from "jspdf";
+import { translations, type SecurityTranslations, getDateLocale } from "./translations";
+import UnlockGate from "@/components/UnlockGate";
 
 interface AuditCheck {
   id: string;
@@ -72,27 +74,49 @@ interface AuditResult {
   technologies: string[];
 }
 
-const categoryLabels: Record<string, { label: string; icon: typeof Shield }> = {
-  ssl: { label: "SSL / HTTPS", icon: Lock },
-  headers: { label: "En-têtes de sécurité", icon: Shield },
-  "info-leak": { label: "Fuite d'information", icon: Server },
-  cookies: { label: "Cookies", icon: Cookie },
-  owasp: { label: "OWASP — Vulnérabilités Web", icon: Bug },
-  xss: { label: "Protection XSS & CSRF", icon: ShieldAlert },
-  infra: { label: "Infrastructure & DNS", icon: Network },
-  rgpd: { label: "RGPD / Compliance", icon: Scale },
-  incident: { label: "Incident Response & Monitoring", icon: Siren },
-  performance: { label: "Performance", icon: Gauge },
-  wordpress: { label: "WordPress Security", icon: Blocks },
-  misc: { label: "Divers", icon: Globe },
-};
+function getCategoryLabels(t: SecurityTranslations): Record<string, { label: string; icon: typeof Shield }> {
+  return {
+    ssl: { label: t.catSsl, icon: Lock },
+    headers: { label: t.catHeaders, icon: Shield },
+    "info-leak": { label: t.catInfoLeak, icon: Server },
+    cookies: { label: t.catCookies, icon: Cookie },
+    owasp: { label: t.catOwasp, icon: Bug },
+    xss: { label: t.catXss, icon: ShieldAlert },
+    infra: { label: t.catInfra, icon: Network },
+    rgpd: { label: t.catRgpd, icon: Scale },
+    incident: { label: t.catIncident, icon: Siren },
+    performance: { label: t.catPerformance, icon: Gauge },
+    wordpress: { label: t.catWordpress, icon: Blocks },
+    misc: { label: t.catMisc, icon: Globe },
+  };
+}
 
-const statusConfig = {
-  pass: { icon: CheckCircle2, color: "text-green-500", bg: "bg-green-500/10", label: "OK" },
-  warn: { icon: AlertTriangle, color: "text-yellow-500", bg: "bg-yellow-500/10", label: "Attention" },
-  fail: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", label: "Critique" },
-  info: { icon: Info, color: "text-blue-500", bg: "bg-blue-500/10", label: "Info" },
-};
+function getStatusConfig(t: SecurityTranslations) {
+  return {
+    pass: { icon: CheckCircle2, color: "text-green-500", bg: "bg-green-500/10", label: t.statusOk },
+    warn: { icon: AlertTriangle, color: "text-yellow-500", bg: "bg-yellow-500/10", label: t.statusWarn },
+    fail: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", label: t.statusFail },
+    info: { icon: Info, color: "text-blue-500", bg: "bg-blue-500/10", label: t.statusInfo },
+  };
+}
+
+function getSeverityConfig(t: SecurityTranslations): Record<string, { label: string; color: string }> {
+  return {
+    critical: { label: t.sevCritical, color: "text-red-600 bg-red-500/15 border-red-500/30" },
+    high: { label: t.sevHigh, color: "text-orange-500 bg-orange-500/15 border-orange-500/30" },
+    medium: { label: t.sevMedium, color: "text-yellow-500 bg-yellow-500/15 border-yellow-500/30" },
+    low: { label: t.sevLow, color: "text-blue-400 bg-blue-400/15 border-blue-400/30" },
+  };
+}
+
+function getStatusLabels(t: SecurityTranslations): Record<string, string> {
+  return {
+    "production-ready": "\u2705 " + t.statusProductionReady,
+    "needs-fixes": "\u26a0\ufe0f " + t.statusNeedsFixes,
+    "at-risk": "\ud83d\udfe0 " + t.statusAtRisk,
+    critical: "\ud83d\udd34 " + t.statusCriticalAction,
+  };
+}
 
 const gradeColors: Record<string, string> = {
   "A+": "from-green-500 to-emerald-600",
@@ -141,18 +165,13 @@ function ScoreRing({ score, grade }: { score: number; grade: string }) {
   );
 }
 
-const severityConfig: Record<string, { label: string; color: string }> = {
-  critical: { label: "CRITIQUE", color: "text-red-600 bg-red-500/15 border-red-500/30" },
-  high: { label: "ÉLEVÉ", color: "text-orange-500 bg-orange-500/15 border-orange-500/30" },
-  medium: { label: "MOYEN", color: "text-yellow-500 bg-yellow-500/15 border-yellow-500/30" },
-  low: { label: "FAIBLE", color: "text-blue-400 bg-blue-400/15 border-blue-400/30" },
-};
-
-function CheckCard({ check }: { check: AuditCheck }) {
+function CheckCard({ check, t }: { check: AuditCheck; t: SecurityTranslations }) {
   const [expanded, setExpanded] = useState(false);
-  const config = statusConfig[check.status];
+  const statusCfg = getStatusConfig(t);
+  const sevCfg = getSeverityConfig(t);
+  const config = statusCfg[check.status];
   const StatusIcon = config.icon;
-  const sev = check.severity && check.severity !== "info" ? severityConfig[check.severity] : null;
+  const sev = check.severity && check.severity !== "info" ? sevCfg[check.severity] : null;
 
   return (
     <div
@@ -199,7 +218,7 @@ function CheckCard({ check }: { check: AuditCheck }) {
         <div className="px-4 pb-4 space-y-2 border-t border-border/30 pt-3 mx-4 mb-1">
           {check.value && (
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Valeur :</p>
+              <p className="text-xs text-muted-foreground mb-1">{t.valueLabel}</p>
               <pre className="text-xs bg-muted/50 px-2 py-1 rounded block break-all whitespace-pre-wrap overflow-x-auto">
                 {check.value}
               </pre>
@@ -207,7 +226,7 @@ function CheckCard({ check }: { check: AuditCheck }) {
           )}
           {check.recommendation && (
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Recommandation :</p>
+              <p className="text-xs text-muted-foreground mb-1">{t.recommendationLabel}</p>
               {check.recommendation.includes("\n") ? (
                 <pre className="text-xs text-primary bg-muted/30 px-3 py-2 rounded-lg whitespace-pre-wrap overflow-x-auto font-mono">
                   {check.recommendation}
@@ -227,25 +246,19 @@ function CheckCard({ check }: { check: AuditCheck }) {
 // AUTO-GENERATED REPORT
 // =============================================================================
 
-const statusLabels: Record<string, string> = {
-  "production-ready": "✅ Production Ready",
-  "needs-fixes": "⚠️ Nécessite des corrections",
-  "at-risk": "🟠 À risque",
-  critical: "🔴 Critique — Action immédiate requise",
-};
-
-function generateReportText(result: AuditResult): string {
-  const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+function generateReportText(result: AuditResult, t: SecurityTranslations, dateLocale: string): string {
+  const date = new Date(result.timestamp).toLocaleDateString(dateLocale, {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
   });
-  const time = new Date(result.timestamp).toLocaleTimeString("fr-BE", {
+  const time = new Date(result.timestamp).toLocaleTimeString(dateLocale, {
     hour: "2-digit",
     minute: "2-digit",
   });
   const hostname = new URL(result.url).hostname;
+  const sLabels = getStatusLabels(t);
 
   const criticals = result.checks.filter((c) => c.severity === "critical" && c.status === "fail");
   const highs = result.checks.filter((c) => c.severity === "high" && c.status === "fail");
@@ -262,32 +275,32 @@ function generateReportText(result: AuditResult): string {
 
   // ─── HEADER ──────────────────────────────────────────────────
   r += `${doubleLine}\n`;
-  r += `  RAPPORT D'AUDIT DE SÉCURITÉ WEB\n`;
+  r += `  ${t.reportHeader}\n`;
   r += `  ${hostname.toUpperCase()}\n`;
   r += `${doubleLine}\n\n`;
 
-  // ─── 1. RÉSUMÉ EXÉCUTIF ──────────────────────────────────────
-  r += `🎯 1. RÉSUMÉ EXÉCUTIF\n`;
+  // ─── 1. EXECUTIVE SUMMARY ──────────────────────────────────────
+  r += `\ud83c\udfaf ${t.reportExecSummary}\n`;
   r += `${line}\n\n`;
-  r += `  URL analysée :     ${result.url}\n`;
-  r += `  Date :             ${date}, ${time}\n`;
-  r += `  Score global :     ${result.score}/100 (${result.grade})\n`;
-  r += `  Statut :           ${statusLabels[result.status]}\n`;
-  r += `  Temps de réponse : ${result.responseTime}ms\n`;
-  r += `  HTTPS :            ${result.tlsInfo.secure ? "Oui ✅" : "Non ❌"}\n\n`;
+  r += `  ${t.reportUrlAnalyzed} :     ${result.url}\n`;
+  r += `  ${t.reportDateLabel} :             ${date}, ${time}\n`;
+  r += `  ${t.reportGlobalScore} :     ${result.score}/100 (${result.grade})\n`;
+  r += `  ${t.reportStatusLabel} :           ${sLabels[result.status]}\n`;
+  r += `  ${t.reportResponseTimeLabel} : ${result.responseTime}ms\n`;
+  r += `  ${t.reportHttps} :            ${result.tlsInfo.secure ? t.reportYes + " \u2705" : t.reportNo + " \u274c"}\n\n`;
 
-  r += `  Vulnérabilités par sévérité :\n`;
-  r += `  🔴 Critiques : ${criticals.length}     🟠 Élevées : ${highs.length}\n`;
-  r += `  🟡 Moyennes :  ${mediums.length}     🔵 Faibles : ${lows.length}\n\n`;
+  r += `  ${t.reportVulnBySeverity} :\n`;
+  r += `  \ud83d\udd34 ${t.reportCriticalsLabel} : ${criticals.length}     \ud83d\udfe0 ${t.reportHighsLabel} : ${highs.length}\n`;
+  r += `  \ud83d\udfe1 ${t.reportMediumsLabel} :  ${mediums.length}     \ud83d\udd35 ${t.reportLowsLabel} : ${lows.length}\n\n`;
 
-  r += `  Résultats : ${passes.length} ✅  |  ${warns.length} ⚠️  |  ${fails.length} ❌  (${result.checks.length} tests)\n\n`;
+  r += `  ${t.reportResultsSummary} : ${passes.length} \u2705  |  ${warns.length} \u26a0\ufe0f  |  ${fails.length} \u274c  (${result.checks.length} ${t.reportTests})\n\n`;
 
   // Top 5 actions
   const topActions = [...criticals, ...highs, ...mediums.filter((c) => c.status !== "pass")]
     .filter((c) => c.recommendation)
     .slice(0, 5);
   if (topActions.length > 0) {
-    r += `  Actions prioritaires :\n`;
+    r += `  ${t.reportPriorityActions} :\n`;
     topActions.forEach((c, i) => {
       r += `  ${i + 1}. ${c.recommendation}\n`;
     });
@@ -295,112 +308,111 @@ function generateReportText(result: AuditResult): string {
   }
 
   // Timeline
-  if (criticals.length > 0) r += `  ⏰ Timeline : Corrections critiques sous 24h\n`;
-  else if (highs.length > 0) r += `  ⏰ Timeline : Corrections élevées sous 7 jours\n`;
-  else if (mediums.length > 0) r += `  ⏰ Timeline : Améliorations sous 30 jours\n`;
-  else r += `  ⏰ Timeline : Maintenance régulière recommandée\n`;
+  if (criticals.length > 0) r += `  \u23f0 ${t.reportTimelineCritical}\n`;
+  else if (highs.length > 0) r += `  \u23f0 ${t.reportTimelineHigh}\n`;
+  else if (mediums.length > 0) r += `  \u23f0 ${t.reportTimelineMedium}\n`;
+  else r += `  \u23f0 ${t.reportTimelineMaintenance}\n`;
   r += `\n`;
 
-  // ─── 2. SCOPE & MÉTHODOLOGIE ─────────────────────────────────
-  r += `🔍 2. SCOPE & MÉTHODOLOGIE\n`;
+  // ─── 2. SCOPE & METHODOLOGY ─────────────────────────────────
+  r += `\ud83d\udd0d ${t.reportScope}\n`;
   r += `${line}\n\n`;
-  r += `  Périmètre :\n`;
-  r += `  • URL principale : ${result.url}\n`;
-  r += `  • Type d'analyse : Externe (boîte noire)\n`;
-  r += `  • ${result.checks.length} vérifications automatisées\n\n`;
+  r += `  ${t.reportScopePerimeter} :\n`;
+  r += `  \u2022 ${t.reportMainUrl} : ${result.url}\n`;
+  r += `  \u2022 ${t.reportAnalysisType}\n`;
+  r += `  \u2022 ${result.checks.length} ${t.reportAutomatedChecks}\n\n`;
 
   if (result.technologies.length > 0) {
-    r += `  Technologies identifiées :\n`;
-    result.technologies.forEach((t) => {
-      r += `  • ${t}\n`;
+    r += `  ${t.reportTechIdentified} :\n`;
+    result.technologies.forEach((tech) => {
+      r += `  \u2022 ${tech}\n`;
     });
     r += `\n`;
   }
 
-  r += `  Méthodes utilisées :\n`;
-  r += `  • Analyse des en-têtes HTTP de sécurité\n`;
-  r += `  • Vérification SSL/TLS et configuration HTTPS\n`;
-  r += `  • Scan de fichiers et répertoires sensibles (OWASP)\n`;
-  r += `  • Analyse DNS (SPF, DMARC, DKIM, DNSSEC)\n`;
-  r += `  • Détection WAF et infrastructure\n`;
-  r += `  • Audit de conformité RGPD\n`;
-  r += `  • Analyse du code source HTML (XSS, CSRF)\n`;
-  r += `  • Vérification monitoring et réponse aux incidents\n\n`;
+  r += `  ${t.reportMethodsUsed} :\n`;
+  r += `  \u2022 ${t.reportMethodHeaders}\n`;
+  r += `  \u2022 ${t.reportMethodSsl}\n`;
+  r += `  \u2022 ${t.reportMethodOwasp}\n`;
+  r += `  \u2022 ${t.reportMethodDns}\n`;
+  r += `  \u2022 ${t.reportMethodWaf}\n`;
+  r += `  \u2022 ${t.reportMethodRgpd}\n`;
+  r += `  \u2022 ${t.reportMethodHtml}\n`;
+  r += `  \u2022 ${t.reportMethodMonitoring}\n\n`;
 
-  r += `  Standards de référence :\n`;
-  r += `  • OWASP Top 10 (2021)\n`;
-  r += `  • RGPD (Règlement Général sur la Protection des Données)\n`;
-  r += `  • RFC 9116 (security.txt)\n`;
-  r += `  • Mozilla Observatory / Security Headers\n\n`;
+  r += `  ${t.reportStandards} :\n`;
+  r += `  \u2022 OWASP Top 10 (2021)\n`;
+  r += `  \u2022 RGPD / GDPR / AVG\n`;
+  r += `  \u2022 RFC 9116 (security.txt)\n`;
+  r += `  \u2022 Mozilla Observatory / Security Headers\n\n`;
 
-  // ─── 3. SCORES PAR CATÉGORIE ─────────────────────────────────
-  r += `📊 3. SCORES PAR CATÉGORIE\n`;
+  // ─── 3. CATEGORY SCORES ─────────────────────────────────
+  r += `\ud83d\udcca ${t.reportCategoryScoresTitle}\n`;
   r += `${line}\n\n`;
 
   const maxLabelLen = Math.max(...result.categoryScores.map((cs) => cs.label.length));
   result.categoryScores.forEach((cs) => {
-    const bar = "█".repeat(Math.round(cs.score / 5)) + "░".repeat(20 - Math.round(cs.score / 5));
+    const bar = "\u2588".repeat(Math.round(cs.score / 5)) + "\u2591".repeat(20 - Math.round(cs.score / 5));
     const pad = " ".repeat(maxLabelLen - cs.label.length);
     r += `  ${cs.label}${pad}  ${bar}  ${cs.score}/100 (${cs.grade})\n`;
   });
 
-  // Global
-  const globalBar = "█".repeat(Math.round(result.score / 5)) + "░".repeat(20 - Math.round(result.score / 5));
-  r += `  ${"─".repeat(maxLabelLen + 30)}\n`;
-  r += `  ${"SCORE GLOBAL"}${" ".repeat(maxLabelLen - 12)}  ${globalBar}  ${result.score}/100 (${result.grade})\n\n`;
+  const globalBar = "\u2588".repeat(Math.round(result.score / 5)) + "\u2591".repeat(20 - Math.round(result.score / 5));
+  r += `  ${"\u2500".repeat(maxLabelLen + 30)}\n`;
+  r += `  ${t.reportGlobalScoreLabel}${" ".repeat(Math.max(0, maxLabelLen - t.reportGlobalScoreLabel.length))}  ${globalBar}  ${result.score}/100 (${result.grade})\n\n`;
 
-  // ─── 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES ───────────────────
+  // ─── 4. CRITICAL & HIGH VULNERABILITIES ───────────────────
   const urgent = [...criticals, ...highs];
   if (urgent.length > 0) {
-    r += `🚨 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES\n`;
+    r += `\ud83d\udea8 ${t.reportCriticalVulns}\n`;
     r += `${line}\n`;
-    urgent.forEach((c, i) => {
-      const sev = c.severity === "critical" ? "🔴 CRITIQUE" : "🟠 ÉLEVÉ";
+    urgent.forEach((c) => {
+      const sev = c.severity === "critical" ? `\ud83d\udd34 ${t.reportSevCritical}` : `\ud83d\udfe0 ${t.reportSevHigh}`;
       r += `\n  ${sev}: ${c.name}\n`;
-      r += `  ├─ Description :    ${c.description}\n`;
-      if (c.value) r += `  ├─ Valeur :        ${c.value}\n`;
-      r += `  ├─ Impact :        ${c.severity === "critical" ? "Compromission possible du système" : "Risque significatif pour la sécurité"}\n`;
-      r += `  ├─ Correction :    ${c.severity === "critical" ? "0-24h" : "1-7 jours"}\n`;
-      if (c.recommendation) r += `  └─ Remédiation :   ${c.recommendation}\n`;
+      r += `  \u251c\u2500 ${t.reportDescription} :    ${c.description}\n`;
+      if (c.value) r += `  \u251c\u2500 ${t.reportValue} :        ${c.value}\n`;
+      r += `  \u251c\u2500 ${t.pdfImpact} :        ${c.severity === "critical" ? t.reportImpactCritical : t.reportImpactHigh}\n`;
+      r += `  \u251c\u2500 ${t.pdfCorrection} :    ${c.severity === "critical" ? t.reportFixCritical : t.reportFixHigh}\n`;
+      if (c.recommendation) r += `  \u2514\u2500 ${t.reportRemediation} :   ${c.recommendation}\n`;
     });
     r += `\n`;
   } else {
-    r += `🚨 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES\n`;
+    r += `\ud83d\udea8 ${t.reportCriticalVulns}\n`;
     r += `${line}\n\n`;
-    r += `  ✅ Aucune vulnérabilité critique ou élevée détectée.\n\n`;
+    r += `  \u2705 ${t.reportNoCriticalVulns}\n\n`;
   }
 
-  // ─── 5. ALERTES DE SÉVÉRITÉ MOYENNE ──────────────────────────
+  // ─── 5. MEDIUM SEVERITY ALERTS ──────────────────────────
   const mediumFails = mediums.filter((c) => c.status !== "pass");
   if (mediumFails.length > 0) {
-    r += `⚠️ 5. ALERTES DE SÉVÉRITÉ MOYENNE\n`;
+    r += `\u26a0\ufe0f ${t.reportMediumAlerts}\n`;
     r += `${line}\n`;
     mediumFails.forEach((c, i) => {
-      r += `\n  ${i + 1}. 🟡 ${c.name}\n`;
+      r += `\n  ${i + 1}. \ud83d\udfe1 ${c.name}\n`;
       r += `     ${c.description}\n`;
-      if (c.recommendation) r += `     → ${c.recommendation}\n`;
+      if (c.recommendation) r += `     \u2192 ${c.recommendation}\n`;
     });
     r += `\n`;
   } else {
-    r += `⚠️ 5. ALERTES DE SÉVÉRITÉ MOYENNE\n`;
+    r += `\u26a0\ufe0f ${t.reportMediumAlerts}\n`;
     r += `${line}\n\n`;
-    r += `  ✅ Aucune alerte de sévérité moyenne.\n\n`;
+    r += `  \u2705 ${t.reportNoMediumAlerts}\n\n`;
   }
 
-  // ─── 6. RECOMMANDATIONS (FAIBLES) ────────────────────────────
+  // ─── 6. RECOMMENDATIONS (LOW) ────────────────────────────
   const lowFails = lows.filter((c) => c.status !== "pass");
   if (lowFails.length > 0) {
-    r += `💡 6. RECOMMANDATIONS\n`;
+    r += `\ud83d\udca1 ${t.reportRecommendationsLow}\n`;
     r += `${line}\n\n`;
     lowFails.forEach((c, i) => {
       r += `  ${i + 1}. ${c.name}\n`;
       r += `     ${c.description}\n`;
-      if (c.recommendation) r += `     → ${c.recommendation}\n\n`;
+      if (c.recommendation) r += `     \u2192 ${c.recommendation}\n\n`;
     });
   }
 
-  // ─── 7. INVENTAIRE DÉTAILLÉ PAR CATÉGORIE ────────────────────
-  r += `📋 7. INVENTAIRE DÉTAILLÉ PAR CATÉGORIE\n`;
+  // ─── 7. DETAILED INVENTORY BY CATEGORY ────────────────────
+  r += `\ud83d\udccb ${t.reportDetailedInventory}\n`;
   r += `${line}\n`;
 
   const grouped = result.checks.reduce(
@@ -414,18 +426,18 @@ function generateReportText(result: AuditResult): string {
 
   Object.entries(grouped).forEach(([cat, checks]) => {
     const catScore = result.categoryScores.find((cs) => cs.category === cat);
-    r += `\n  ■ ${catScore?.label || cat.toUpperCase()}`;
-    if (catScore) r += ` — ${catScore.score}/100 (${catScore.grade})`;
+    r += `\n  \u25a0 ${catScore?.label || cat.toUpperCase()}`;
+    if (catScore) r += ` \u2014 ${catScore.score}/100 (${catScore.grade})`;
     r += `\n`;
 
     checks.forEach((c) => {
-      const icon = c.status === "pass" ? "✅" : c.status === "fail" ? "❌" : c.status === "warn" ? "⚠️" : "ℹ️";
+      const icon = c.status === "pass" ? "\u2705" : c.status === "fail" ? "\u274c" : c.status === "warn" ? "\u26a0\ufe0f" : "\u2139\ufe0f";
       r += `    ${icon} ${c.name}`;
       if (c.status !== "pass" && c.severity && c.severity !== "info") {
         const sevLabel =
-          c.severity === "critical" ? "[CRITIQUE]" :
-          c.severity === "high" ? "[ÉLEVÉ]" :
-          c.severity === "medium" ? "[MOYEN]" : "[FAIBLE]";
+          c.severity === "critical" ? `[${t.sevCritical}]` :
+          c.severity === "high" ? `[${t.sevHigh}]` :
+          c.severity === "medium" ? `[${t.sevMedium}]` : `[${t.sevLow}]`;
         r += ` ${sevLabel}`;
       }
       r += `\n`;
@@ -433,18 +445,18 @@ function generateReportText(result: AuditResult): string {
   });
   r += `\n`;
 
-  // ─── 8. POINTS POSITIFS ──────────────────────────────────────
+  // ─── 8. POSITIVE POINTS ──────────────────────────────────
   if (passes.length > 0) {
-    r += `✅ 8. POINTS POSITIFS\n`;
+    r += `\u2705 ${t.reportPositivePoints}\n`;
     r += `${line}\n\n`;
     passes.forEach((c) => {
-      r += `  • ${c.name}\n`;
+      r += `  \u2022 ${c.name}\n`;
     });
     r += `\n`;
   }
 
-  // ─── 9. ROADMAP DE REMÉDIATION ───────────────────────────────
-  r += `🎯 9. ROADMAP DE REMÉDIATION\n`;
+  // ─── 9. REMEDIATION ROADMAP ───────────────────────────────
+  r += `\ud83c\udfaf ${t.reportRoadmap}\n`;
   r += `${line}\n\n`;
 
   const immActions = urgent.filter((c) => c.recommendation);
@@ -452,7 +464,7 @@ function generateReportText(result: AuditResult): string {
   const longActions = lowFails.filter((c) => c.recommendation);
 
   if (immActions.length > 0) {
-    r += `  Actions immédiates (0-7 jours) :\n`;
+    r += `  ${t.reportImmediateActions} :\n`;
     immActions.forEach((c, i) => {
       r += `  ${i + 1}. ${c.recommendation}\n`;
     });
@@ -460,7 +472,7 @@ function generateReportText(result: AuditResult): string {
   }
 
   if (shortActions.length > 0) {
-    r += `  Court terme (1-3 mois) :\n`;
+    r += `  ${t.reportShortTerm} :\n`;
     shortActions.forEach((c, i) => {
       r += `  ${i + 1}. ${c.recommendation}\n`;
     });
@@ -468,7 +480,7 @@ function generateReportText(result: AuditResult): string {
   }
 
   if (longActions.length > 0) {
-    r += `  Long terme (3-12 mois) :\n`;
+    r += `  ${t.reportLongTerm} :\n`;
     longActions.forEach((c, i) => {
       r += `  ${i + 1}. ${c.recommendation}\n`;
     });
@@ -476,55 +488,45 @@ function generateReportText(result: AuditResult): string {
   }
 
   if (immActions.length === 0 && shortActions.length === 0 && longActions.length === 0) {
-    r += `  ✅ Aucune action corrective majeure nécessaire.\n`;
-    r += `  Maintenir une veille sécurité régulière et planifier des audits périodiques.\n\n`;
+    r += `  \u2705 ${t.reportNoCorrectiveAction}\n`;
+    r += `  ${t.reportMaintainWatch}\n\n`;
   }
 
-  // ─── 10. CONCLUSION ──────────────────────────────────────────
-  r += `📝 10. CONCLUSION\n`;
+  // ─── 10. CONCLUSION ──────────────────────────────────────
+  r += `\ud83d\udcdd ${t.reportConclusion}\n`;
   r += `${line}\n\n`;
 
   if (result.score >= 85) {
-    r += `  Le site ${hostname} présente un bon niveau de sécurité (${result.grade}, ${result.score}/100).\n`;
-    r += `  Les fondamentaux sont en place. Quelques améliorations mineures\n`;
-    r += `  permettraient d'atteindre un niveau optimal.\n\n`;
-    r += `  Recommandation : Maintenir le niveau actuel avec des audits\n`;
-    r += `  trimestriels et une veille sur les nouvelles vulnérabilités.\n`;
+    r += `  ${hostname} ${t.reportConclusionGoodStart} (${result.grade}, ${result.score}/100).\n`;
+    r += `  ${t.reportConclusionGoodBody}\n\n`;
+    r += `  ${t.reportConclusionGoodRec}\n`;
   } else if (result.score >= 60) {
-    r += `  Le site ${hostname} présente un niveau de sécurité acceptable\n`;
-    r += `  (${result.grade}, ${result.score}/100) mais nécessite des améliorations significatives.\n\n`;
-    r += `  Recommandation : Priorisez les corrections critiques et élevées\n`;
-    r += `  dans les 7 prochains jours, puis traitez les alertes moyennes\n`;
-    r += `  dans le mois suivant.\n`;
+    r += `  ${hostname} ${t.reportConclusionAcceptableStart}\n`;
+    r += `  (${result.grade}, ${result.score}/100) ${t.reportConclusionAcceptableBody}\n\n`;
+    r += `  ${t.reportConclusionAcceptableRec}\n`;
   } else if (result.score >= 40) {
-    r += `  Le site ${hostname} présente des faiblesses de sécurité importantes\n`;
-    r += `  (${result.grade}, ${result.score}/100). Une intervention rapide est nécessaire.\n\n`;
-    r += `  Recommandation : Mobilisez une équipe technique pour corriger\n`;
-    r += `  les vulnérabilités critiques dans les 24-48h. Un plan de\n`;
-    r += `  remédiation complet doit être mis en place immédiatement.\n`;
+    r += `  ${hostname} ${t.reportConclusionWeakStart}\n`;
+    r += `  (${result.grade}, ${result.score}/100). ${t.reportConclusionWeakBody}\n\n`;
+    r += `  ${t.reportConclusionWeakRec}\n`;
   } else {
-    r += `  Le site ${hostname} présente un niveau de sécurité insuffisant\n`;
-    r += `  (${result.grade}, ${result.score}/100). Des risques majeurs ont été identifiés.\n\n`;
-    r += `  Recommandation : URGENCE — Stoppez toute mise en production.\n`;
-    r += `  Les vulnérabilités critiques doivent être corrigées AVANT toute\n`;
-    r += `  exposition publique. Un audit approfondi par un professionnel\n`;
-    r += `  de la cybersécurité est fortement recommandé.\n`;
+    r += `  ${hostname} ${t.reportConclusionCriticalStart}\n`;
+    r += `  (${result.grade}, ${result.score}/100). ${t.reportConclusionCriticalBody}\n\n`;
+    r += `  ${t.reportConclusionCriticalRec}\n`;
   }
 
   r += `\n`;
   r += `${doubleLine}\n`;
-  r += `  Rapport généré par The Webmaster — Security Audit Tool v2.0\n`;
-  r += `  https://thewebmaster.pro/fr/security-audit\n`;
+  r += `  ${t.reportFooter}\n`;
   r += `  ${date}, ${time}\n`;
   r += `${doubleLine}\n`;
 
   return r;
 }
 
-function generatePDF(result: AuditResult) {
+function generatePDF(result: AuditResult, t: SecurityTranslations, dateLocale: string) {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const hostname = new URL(result.url).hostname;
-  const date = new Date(result.timestamp).toLocaleDateString("fr-BE", {
+  const date = new Date(result.timestamp).toLocaleDateString(dateLocale, {
     day: "numeric", month: "long", year: "numeric",
   });
   const pageW = doc.internal.pageSize.getWidth();
@@ -532,6 +534,7 @@ function generatePDF(result: AuditResult) {
   const margin = 20;
   const contentW = pageW - margin * 2;
   let y = 0;
+  const sLabels = getStatusLabels(t);
 
   const colors = {
     primary: [59, 130, 246] as [number, number, number],
@@ -548,10 +551,9 @@ function generatePDF(result: AuditResult) {
 
   function checkPage(needed: number) {
     if (y + needed > pageH - 20) {
-      // Footer before new page
       doc.setFontSize(7);
       doc.setTextColor(...colors.muted);
-      doc.text(`The Webmaster — Security Audit Report — ${hostname}`, pageW / 2, pageH - 10, { align: "center" });
+      doc.text("The Webmaster \u2014 Security Audit Report \u2014 " + hostname, pageW / 2, pageH - 10, { align: "center" });
       doc.addPage();
       y = 20;
     }
@@ -592,11 +594,11 @@ function generatePDF(result: AuditResult) {
   doc.setTextColor(...colors.white);
   doc.setFontSize(10);
   doc.setFont("helvetica", "normal");
-  doc.text("THE WEBMASTER — SECURITY AUDIT TOOL", margin, 18);
+  doc.text("THE WEBMASTER \u2014 SECURITY AUDIT TOOL", margin, 18);
 
   doc.setFontSize(22);
   doc.setFont("helvetica", "bold");
-  doc.text("Rapport d'Audit de Sécurité", margin, 33);
+  doc.text(t.pdfCoverTitle, margin, 33);
 
   doc.setFontSize(14);
   doc.setFont("helvetica", "normal");
@@ -627,7 +629,7 @@ function generatePDF(result: AuditResult) {
 
   doc.setFontSize(9);
   doc.setTextColor(...colors.muted);
-  doc.text(statusLabels[result.status].replace(/[^\w\sÀ-ÿ—]/g, "").trim(), margin + 30, y + 20);
+  doc.text(sLabels[result.status].replace(/[^\w\s\u00C0-\u00FF\u2014]/g, "").trim(), margin + 30, y + 20);
 
   // Counters
   const criticals = result.checks.filter(c => c.severity === "critical" && c.status === "fail");
@@ -640,8 +642,8 @@ function generatePDF(result: AuditResult) {
   doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...colors.green); doc.text(`${passes.length} OK`, cx, y + 10);
-  doc.setTextColor(...colors.yellow); doc.text(`${warns.length} Alertes`, cx + 22, y + 10);
-  doc.setTextColor(...colors.red); doc.text(`${fails.length} Critiques`, cx + 48, y + 10);
+  doc.setTextColor(...colors.yellow); doc.text(`${warns.length} ${t.warnings}`, cx + 22, y + 10);
+  doc.setTextColor(...colors.red); doc.text(`${fails.length} ${t.critical}`, cx + 48, y + 10);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(...colors.muted);
@@ -649,35 +651,35 @@ function generatePDF(result: AuditResult) {
 
   y += 36;
 
-  // ─── 1. RÉSUMÉ EXÉCUTIF ───────────────────────────────────────
-  sectionTitle("1. Résumé Exécutif");
-  bodyText(`URL analysée : ${result.url}`);
-  bodyText(`Score global : ${result.score}/100 (${result.grade}) — ${statusLabels[result.status].replace(/[^\w\sÀ-ÿ—]/g, "").trim()}`);
-  bodyText(`HTTPS : ${result.tlsInfo.secure ? "Oui" : "Non"} | Temps de réponse : ${result.responseTime}ms`);
-  bodyText(`Vulnérabilités : ${criticals.length} critiques, ${highs.length} élevées, ${warns.length} alertes`);
+  // ─── 1. EXECUTIVE SUMMARY ───────────────────────────────────────
+  sectionTitle(t.pdfSummary);
+  bodyText(`${t.pdfUrlAnalyzed} : ${result.url}`);
+  bodyText(`${t.pdfGlobalScore} : ${result.score}/100 (${result.grade}) \u2014 ${sLabels[result.status].replace(/[^\w\s\u00C0-\u00FF\u2014]/g, "").trim()}`);
+  bodyText(`${t.reportHttps} : ${result.tlsInfo.secure ? t.reportYes : t.reportNo} | ${t.pdfResponseTime} : ${result.responseTime}ms`);
+  bodyText(`${t.pdfVulnerabilities} : ${criticals.length} ${t.pdfCritical}, ${highs.length} ${t.sevHigh}, ${warns.length} ${t.pdfWarnings}`);
   y += 3;
 
   const topActions = [...criticals, ...highs].filter(c => c.recommendation).slice(0, 5);
   if (topActions.length > 0) {
-    bodyText("Top actions prioritaires :", { bold: true });
+    bodyText(t.pdfTopActions + " :", { bold: true });
     topActions.forEach((c, i) => {
       bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 });
     });
     y += 2;
   }
 
-  // ─── 2. SCOPE & MÉTHODOLOGIE ──────────────────────────────────
-  sectionTitle("2. Scope & Méthodologie");
-  bodyText(`Périmètre : ${result.url} — Analyse externe (boîte noire)`);
-  bodyText(`${result.checks.length} vérifications automatisées`);
+  // ─── 2. SCOPE & METHODOLOGY ──────────────────────────────────
+  sectionTitle(t.pdfScope);
+  bodyText(`${t.reportScopePerimeter} : ${result.url} \u2014 ${t.reportAnalysisType}`);
+  bodyText(`${result.checks.length} ${t.reportAutomatedChecks}`);
   if (result.technologies.length > 0) {
-    bodyText(`Technologies détectées : ${result.technologies.join(", ")}`);
+    bodyText(`${t.pdfTechDetectedLabel} : ${result.technologies.join(", ")}`);
   }
-  bodyText("Standards : OWASP Top 10 (2021), RGPD, RFC 9116, Mozilla Observatory");
+  bodyText(t.pdfStandards);
   y += 3;
 
-  // ─── 3. SCORES PAR CATÉGORIE ──────────────────────────────────
-  sectionTitle("3. Scores par Catégorie");
+  // ─── 3. CATEGORY SCORES ──────────────────────────────────
+  sectionTitle(t.pdfCatScores);
   result.categoryScores.forEach(cs => {
     checkPage(8);
     const barWidth = contentW - 50;
@@ -701,57 +703,57 @@ function generatePDF(result: AuditResult) {
   });
   y += 3;
 
-  // ─── 4. VULNÉRABILITÉS CRITIQUES & ÉLEVÉES ────────────────────
+  // ─── 4. CRITICAL & HIGH VULNERABILITIES ────────────────────
   const urgent = [...criticals, ...highs];
-  sectionTitle("4. Vulnérabilités Critiques & Élevées");
+  sectionTitle(t.pdfCritVulns);
   if (urgent.length === 0) {
-    bodyText("Aucune vulnérabilité critique ou élevée détectée.", { color: colors.green });
+    bodyText(t.pdfNoCritVulns, { color: colors.green });
     y += 3;
   } else {
     urgent.forEach(c => {
       const sevColor = c.severity === "critical" ? colors.red : colors.orange;
-      const sevLabel = c.severity === "critical" ? "CRITIQUE" : "ÉLEVÉ";
+      const sevLabel = c.severity === "critical" ? t.sevCritical : t.sevHigh;
       bodyText(`[${sevLabel}] ${c.name}`, { bold: true, color: sevColor });
       bodyText(c.description, { indent: 4 });
-      if (c.value) bodyText(`Valeur : ${c.value}`, { indent: 4, color: colors.muted });
-      if (c.recommendation) bodyText(`Remédiation : ${c.recommendation}`, { indent: 4, color: colors.primary });
+      if (c.value) bodyText(`${t.reportValue} : ${c.value}`, { indent: 4, color: colors.muted });
+      if (c.recommendation) bodyText(`${t.reportRemediation} : ${c.recommendation}`, { indent: 4, color: colors.primary });
       y += 2;
     });
   }
 
-  // ─── 5. ALERTES MOYENNES ──────────────────────────────────────
+  // ─── 5. MEDIUM SEVERITY ALERTS ──────────────────────────────
   const mediums = result.checks.filter(c => c.severity === "medium" && c.status !== "pass");
-  sectionTitle("5. Alertes de Sévérité Moyenne");
+  sectionTitle(t.pdfMedAlerts);
   if (mediums.length === 0) {
-    bodyText("Aucune alerte de sévérité moyenne.", { color: colors.green });
+    bodyText(t.pdfNoMedAlerts, { color: colors.green });
     y += 3;
   } else {
     mediums.forEach((c, i) => {
       bodyText(`${i + 1}. ${c.name}`, { bold: true });
       bodyText(c.description, { indent: 4 });
-      if (c.recommendation) bodyText(`→ ${c.recommendation}`, { indent: 4, color: colors.primary });
+      if (c.recommendation) bodyText(`\u2192 ${c.recommendation}`, { indent: 4, color: colors.primary });
       y += 1;
     });
     y += 2;
   }
 
-  // ─── 6. RECOMMANDATIONS ───────────────────────────────────────
+  // ─── 6. RECOMMENDATIONS ───────────────────────────────────
   const lows = result.checks.filter(c => c.severity === "low" && c.status !== "pass");
-  sectionTitle("6. Recommandations (Faibles)");
+  sectionTitle(t.pdfLowRecs);
   if (lows.length === 0) {
-    bodyText("Aucune recommandation de faible sévérité.", { color: colors.green });
+    bodyText(t.pdfNoLowRecs, { color: colors.green });
     y += 3;
   } else {
     lows.forEach((c, i) => {
-      bodyText(`${i + 1}. ${c.name} — ${c.description}`, { indent: 0 });
-      if (c.recommendation) bodyText(`→ ${c.recommendation}`, { indent: 4, color: colors.primary });
+      bodyText(`${i + 1}. ${c.name} \u2014 ${c.description}`, { indent: 0 });
+      if (c.recommendation) bodyText(`\u2192 ${c.recommendation}`, { indent: 4, color: colors.primary });
       y += 1;
     });
     y += 2;
   }
 
-  // ─── 7. INVENTAIRE DÉTAILLÉ ───────────────────────────────────
-  sectionTitle("7. Inventaire Détaillé par Catégorie");
+  // ─── 7. DETAILED INVENTORY ───────────────────────────────────
+  sectionTitle(t.pdfDetailedInventory);
   const grouped = result.checks.reduce((acc, check) => {
     if (!acc[check.category]) acc[check.category] = [];
     acc[check.category].push(check);
@@ -761,7 +763,7 @@ function generatePDF(result: AuditResult) {
   Object.entries(grouped).forEach(([cat, checks]) => {
     const catScore = result.categoryScores.find(cs => cs.category === cat);
     checkPage(8);
-    bodyText(`${catScore?.label || cat} — ${catScore?.score ?? "?"}/100 (${catScore?.grade ?? "?"})`, { bold: true });
+    bodyText(`${catScore?.label || cat} \u2014 ${catScore?.score ?? "?"}/100 (${catScore?.grade ?? "?"})`, { bold: true });
     checks.forEach(c => {
       const icon = c.status === "pass" ? "[OK]" : c.status === "fail" ? "[FAIL]" : c.status === "warn" ? "[WARN]" : "[INFO]";
       const iconColor = c.status === "pass" ? colors.green : c.status === "fail" ? colors.red : c.status === "warn" ? colors.yellow : colors.muted;
@@ -770,55 +772,55 @@ function generatePDF(result: AuditResult) {
     y += 2;
   });
 
-  // ─── 8. POINTS POSITIFS ───────────────────────────────────────
+  // ─── 8. POSITIVE FINDINGS ───────────────────────────────────
   if (passes.length > 0) {
-    sectionTitle("8. Points Positifs");
+    sectionTitle(t.pdfPositivePoints);
     passes.forEach(c => {
-      bodyText(`• ${c.name}`, { color: colors.green });
+      bodyText(`\u2022 ${c.name}`, { color: colors.green });
     });
     y += 3;
   }
 
   // ─── 9. ROADMAP ───────────────────────────────────────────────
-  sectionTitle("9. Roadmap de Remédiation");
+  sectionTitle(t.pdfRoadmap);
   const immActions = urgent.filter(c => c.recommendation);
   const shortActions = mediums.filter(c => c.recommendation);
   const longActions = lows.filter(c => c.recommendation);
 
   if (immActions.length > 0) {
-    bodyText("Actions immédiates (0-7 jours) :", { bold: true, color: colors.red });
+    bodyText(t.pdfImmActions, { bold: true, color: colors.red });
     immActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
     y += 2;
   }
   if (shortActions.length > 0) {
-    bodyText("Court terme (1-3 mois) :", { bold: true, color: colors.orange });
+    bodyText(t.pdfShortTerm, { bold: true, color: colors.orange });
     shortActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
     y += 2;
   }
   if (longActions.length > 0) {
-    bodyText("Long terme (3-12 mois) :", { bold: true, color: colors.muted });
+    bodyText(t.pdfLongTerm, { bold: true, color: colors.muted });
     longActions.forEach((c, i) => bodyText(`${i + 1}. ${c.recommendation}`, { indent: 4 }));
     y += 2;
   }
   if (immActions.length === 0 && shortActions.length === 0 && longActions.length === 0) {
-    bodyText("Aucune action corrective majeure nécessaire. Maintenir une veille régulière.", { color: colors.green });
+    bodyText(t.pdfNoCorrectiveAction, { color: colors.green });
     y += 3;
   }
 
   // ─── 10. CONCLUSION ───────────────────────────────────────────
-  sectionTitle("10. Conclusion");
+  sectionTitle(t.pdfConclusionTitle);
   if (result.score >= 85) {
-    bodyText(`Le site ${hostname} présente un bon niveau de sécurité (${result.grade}, ${result.score}/100). Les fondamentaux sont en place. Quelques améliorations mineures permettraient d'atteindre un niveau optimal.`);
-    bodyText("Recommandation : Maintenir le niveau actuel avec des audits trimestriels et une veille sur les nouvelles vulnérabilités.");
+    bodyText(`${hostname} ${t.pdfConclusionGood} (${result.grade}, ${result.score}/100).`);
+    bodyText(t.pdfConclusionGoodRec);
   } else if (result.score >= 60) {
-    bodyText(`Le site ${hostname} présente un niveau de sécurité acceptable (${result.grade}, ${result.score}/100) mais nécessite des améliorations significatives.`);
-    bodyText("Recommandation : Priorisez les corrections critiques et élevées dans les 7 prochains jours.");
+    bodyText(`${hostname} ${t.pdfConclusionAcceptable} (${result.grade}, ${result.score}/100) ${t.pdfConclusionAcceptableBody}`);
+    bodyText(t.pdfConclusionAcceptableRec);
   } else if (result.score >= 40) {
-    bodyText(`Le site ${hostname} présente des faiblesses de sécurité importantes (${result.grade}, ${result.score}/100). Une intervention rapide est nécessaire.`);
-    bodyText("Recommandation : Mobilisez une équipe technique pour corriger les vulnérabilités critiques dans les 24-48h.");
+    bodyText(`${hostname} ${t.pdfConclusionWeak} (${result.grade}, ${result.score}/100). ${t.pdfConclusionWeakBody}`);
+    bodyText(t.pdfConclusionWeakRec);
   } else {
-    bodyText(`Le site ${hostname} présente un niveau de sécurité insuffisant (${result.grade}, ${result.score}/100). Des risques majeurs ont été identifiés.`);
-    bodyText("URGENCE — Stoppez toute mise en production. Un audit approfondi par un professionnel de la cybersécurité est fortement recommandé.", { bold: true, color: colors.red });
+    bodyText(`${hostname} ${t.pdfConclusionCritical} (${result.grade}, ${result.score}/100). ${t.pdfConclusionCriticalBody}`);
+    bodyText(t.pdfConclusionCriticalRec, { bold: true, color: colors.red });
   }
 
   // ─── FOOTER (last page) ───────────────────────────────────────
@@ -830,9 +832,7 @@ function generatePDF(result: AuditResult) {
   y += 6;
   doc.setFontSize(8);
   doc.setTextColor(...colors.muted);
-  doc.text("Rapport généré par The Webmaster — Security Audit Tool v2.0", margin, y);
-  y += 4;
-  doc.text("https://thewebmaster.pro/fr/security-audit", margin, y);
+  doc.text(t.pdfFooter, margin, y);
   y += 4;
   doc.text(date, margin, y);
 
@@ -844,16 +844,16 @@ function generatePDF(result: AuditResult) {
     doc.setTextColor(...colors.muted);
     doc.text(`Page ${i}/${totalPages}`, pageW - margin, pageH - 10, { align: "right" });
     if (i > 1) {
-      doc.text(`The Webmaster — Security Audit Report — ${hostname}`, pageW / 2, pageH - 10, { align: "center" });
+      doc.text("The Webmaster \u2014 Security Audit Report \u2014 " + hostname, pageW / 2, pageH - 10, { align: "center" });
     }
   }
 
   doc.save(`audit-securite-${hostname}-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
-function AuditReport({ result }: { result: AuditResult }) {
+function AuditReport({ result, t, dateLocale }: { result: AuditResult; t: SecurityTranslations; dateLocale: string }) {
   const [copied, setCopied] = useState(false);
-  const report = generateReportText(result);
+  const report = generateReportText(result, t, dateLocale);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(report);
@@ -869,14 +869,14 @@ function AuditReport({ result }: { result: AuditResult }) {
             <FileText className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h3 className="text-lg font-bold">Rapport d&apos;audit</h3>
+            <h3 className="text-lg font-bold">{t.reportAuditTitle}</h3>
             <p className="text-xs text-muted-foreground">
-              Synthèse des résultats et plan d&apos;action
+              {t.reportAuditSubtitle}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => generatePDF(result)} className="gap-2">
+          <Button variant="outline" size="sm" onClick={() => generatePDF(result, t, dateLocale)} className="gap-2">
             <Download className="w-4 h-4" />
             PDF
           </Button>
@@ -884,12 +884,12 @@ function AuditReport({ result }: { result: AuditResult }) {
             {copied ? (
               <>
                 <Check className="w-4 h-4 text-green-500" />
-                Copié
+                {t.copied}
               </>
             ) : (
               <>
                 <Copy className="w-4 h-4" />
-                Copier
+                {t.copy}
               </>
             )}
           </Button>
@@ -902,11 +902,22 @@ function AuditReport({ result }: { result: AuditResult }) {
   );
 }
 
-export default function SecurityAuditClient() {
+export default function SecurityAuditClient({ locale = "fr" }: { locale?: string }) {
+  const t = translations[locale as keyof typeof translations] || translations.fr;
+  const dateLocale = getDateLocale(locale);
+  const categoryLabels = getCategoryLabels(t);
+  const statusCfg = getStatusConfig(t);
+
   const [url, setUrl] = useState("");
   const [result, setResult] = useState<AuditResult | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState("");
+  const [unlocked, setUnlocked] = useState(() => {
+    if (typeof window !== "undefined") {
+      return sessionStorage.getItem("audit-unlocked-security") === "true";
+    }
+    return false;
+  });
 
   const handleAudit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -924,12 +935,12 @@ export default function SecurityAuditClient() {
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Erreur inconnue");
+      if (!res.ok) throw new Error(data.error || t.errorUnknown);
 
       setResult(data);
       setStatus("idle");
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Une erreur est survenue");
+      setErrorMsg(err instanceof Error ? err.message : t.errorOccurred);
       setStatus("error");
     }
   };
@@ -964,7 +975,7 @@ export default function SecurityAuditClient() {
           </Link>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Shield className="w-4 h-4 text-primary" />
-            Security Audit Tool
+            {t.toolName}
           </div>
         </div>
       </header>
@@ -976,11 +987,10 @@ export default function SecurityAuditClient() {
             <ShieldCheck className="w-8 h-8 text-primary" />
           </div>
           <h1 className="text-3xl md:text-4xl font-bold mb-3">
-            Audit de Sécurité <span className="text-primary">Web</span>
+            {t.title} <span className="text-primary">{t.titleHighlight}</span>
           </h1>
           <p className="text-muted-foreground max-w-xl mx-auto">
-            Analysez en profondeur la sécurité d&apos;un site web : headers HTTP, SSL/TLS,
-            cookies, fuites d&apos;information, technologies détectées et plus.
+            {t.subtitle}
           </p>
         </div>
 
@@ -993,7 +1003,7 @@ export default function SecurityAuditClient() {
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="exemple.com"
+                placeholder={t.placeholder}
                 className="w-full h-12 pl-12 pr-4 rounded-xl border bg-card/50 focus:outline-none focus:ring-2 focus:ring-primary text-sm"
                 disabled={status === "loading"}
               />
@@ -1002,12 +1012,12 @@ export default function SecurityAuditClient() {
               {status === "loading" ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Analyse...
+                  {t.analyzing}
                 </>
               ) : (
                 <>
                   <Search className="w-4 h-4 mr-2" />
-                  Analyser
+                  {t.analyze}
                 </>
               )}
             </Button>
@@ -1026,7 +1036,7 @@ export default function SecurityAuditClient() {
               <Shield className="absolute inset-0 m-auto w-8 h-8 text-primary" />
             </div>
             <p className="text-muted-foreground animate-pulse">
-              Analyse en cours... Vérification des headers, SSL, cookies et technologies.
+              {t.loadingText}
             </p>
           </div>
         )}
@@ -1039,19 +1049,19 @@ export default function SecurityAuditClient() {
               <div className="flex flex-col md:flex-row items-center gap-8">
                 <ScoreRing score={result.score} grade={result.grade} />
                 <div className="flex-1 text-center md:text-left">
-                  <h2 className="text-xl font-bold mb-1">Résultat de l&apos;audit</h2>
+                  <h2 className="text-xl font-bold mb-1">{t.resultTitle}</h2>
                   <p className="text-sm text-muted-foreground mb-4 break-all">{result.url}</p>
                   <div className="flex flex-wrap gap-3 justify-center md:justify-start">
                     {summary &&
                       (
                         [
-                          ["pass", summary.pass, "Réussis"],
-                          ["warn", summary.warn, "Alertes"],
-                          ["fail", summary.fail, "Critiques"],
-                          ["info", summary.info, "Infos"],
+                          ["pass", summary.pass, t.passed],
+                          ["warn", summary.warn, t.warnings],
+                          ["fail", summary.fail, t.critical],
+                          ["info", summary.info, t.infos],
                         ] as const
                       ).map(([key, count, label]) => {
-                        const conf = statusConfig[key];
+                        const conf = statusCfg[key];
                         return (
                           <div
                             key={key}
@@ -1068,12 +1078,25 @@ export default function SecurityAuditClient() {
               </div>
             </div>
 
+            {/* Unlock Gate or Full Results */}
+            {!unlocked ? (
+              <UnlockGate
+                t={t}
+                siteUrl={result.url}
+                auditType="security"
+                score={result.score}
+                grade={result.grade}
+                locale={locale}
+                onUnlocked={() => setUnlocked(true)}
+              />
+            ) : (
+            <>
             {/* Technologies */}
             {result.technologies.length > 0 && (
               <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
                 <div className="flex items-center gap-2 mb-4">
                   <Cpu className="w-5 h-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Technologies détectées</h3>
+                  <h3 className="text-lg font-semibold">{t.technologiesDetected}</h3>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {result.technologies.map((tech) => (
@@ -1102,12 +1125,12 @@ export default function SecurityAuditClient() {
                       <CatIcon className="w-5 h-5 text-primary" />
                       <h3 className="text-lg font-semibold">{catInfo.label}</h3>
                       <span className="text-xs text-muted-foreground">
-                        ({checks.length} vérification{checks.length > 1 ? "s" : ""})
+                        ({checks.length} {checks.length > 1 ? t.verifications : t.verification})
                       </span>
                     </div>
                     <div className="space-y-2">
                       {checks.map((check) => (
-                        <CheckCard key={check.id} check={check} />
+                        <CheckCard key={check.id} check={check} t={t} />
                       ))}
                     </div>
                   </div>
@@ -1115,14 +1138,16 @@ export default function SecurityAuditClient() {
               })}
 
             {/* Auto-generated Report */}
-            <AuditReport result={result} />
+            <AuditReport result={result} t={t} dateLocale={dateLocale} />
+            </>
+            )}
 
             {/* Disclaimer */}
             <div className="p-4 rounded-xl border border-border/30 bg-muted/20 text-center">
               <p className="text-xs text-muted-foreground">
-                Cet outil analyse les informations publiquement accessibles (headers HTTP, code source HTML).
-                Il ne remplace pas un audit de sécurité professionnel complet.
-                Analysé le {new Date(result.timestamp).toLocaleString("fr-BE")} — Temps de réponse : {result.responseTime}ms
+                {t.disclaimer}
+                {" "}
+                {t.analyzedOn} {new Date(result.timestamp).toLocaleString(dateLocale)} — {t.responseTimeLabel} : {result.responseTime}ms
               </p>
             </div>
           </div>

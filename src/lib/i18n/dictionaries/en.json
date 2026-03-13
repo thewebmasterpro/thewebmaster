@@ -7,7 +7,11 @@
     "about": "About",
     "faq": "FAQ",
     "contact": "Contact",
-    "cta": "Free quote"
+    "cta": "Free quote",
+    "tools": "Tools",
+    "seoAudit": "SEO Audit",
+    "perfAudit": "Performance Audit",
+    "secAudit": "Security Audit"
   },
   "hero": {
     "badge": "Digital Agency in Belgium",

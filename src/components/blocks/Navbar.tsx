@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { Menu, X, Phone } from "lucide-react";
+import { Menu, X, Phone, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { locales } from "@/lib/i18n/config";
@@ -14,22 +14,43 @@ interface NavLink {
   href: string;
 }
 
+interface NavDropdown {
+  label: string;
+  children: NavLink[];
+}
+
+type NavItem = NavLink | NavDropdown;
+
+function isDropdown(item: NavItem): item is NavDropdown {
+  return "children" in item;
+}
+
+const toolsMenu: NavDropdown = {
+  label: "Outils",
+  children: [
+    { label: "Audit SEO", href: "/seo-audit" },
+    { label: "Audit Performance", href: "/performance-audit" },
+    { label: "Audit Sécurité", href: "/security-audit" },
+  ],
+};
+
 interface NavbarProps {
   logo?: React.ReactNode;
-  links?: NavLink[];
+  links?: NavItem[];
   ctaLabel?: string;
   ctaHref?: string;
   locale?: string;
   className?: string;
 }
 
-const defaultLinks: NavLink[] = [
+const defaultLinks: NavItem[] = [
   { label: "Accueil", href: "#accueil" },
   { label: "Services", href: "#services" },
   { label: "Dépannage", href: "#sos" },
   { label: "Processus", href: "#processus" },
   { label: "À propos", href: "#about" },
   { label: "FAQ", href: "#faq" },
+  toolsMenu,
   { label: "Contact", href: "#contact" },
 ];
 
@@ -60,6 +81,114 @@ function LanguageSwitcher({ locale }: { locale: string }) {
           {l}
         </button>
       ))}
+    </div>
+  );
+}
+
+function DesktopDropdown({ item, locale }: { item: NavDropdown; locale: string }) {
+  const [open, setOpen] = useState(false);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleEnter = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setOpen(true);
+  };
+
+  const handleLeave = () => {
+    timeoutRef.current = setTimeout(() => setOpen(false), 150);
+  };
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
+    >
+      <button
+        className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+        onClick={() => setOpen(!open)}
+      >
+        {item.label}
+        <ChevronDown
+          className={cn(
+            "w-3.5 h-3.5 transition-transform duration-200",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15 }}
+            className="absolute top-full left-0 mt-1 min-w-50 rounded-lg border border-border/50 bg-background/95 backdrop-blur-xl shadow-lg overflow-hidden"
+          >
+            {item.children.map((child) => (
+              <Link
+                key={child.href}
+                href={`/${locale}${child.href}`}
+                onClick={() => setOpen(false)}
+                className="block px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                {child.label}
+              </Link>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function MobileDropdown({
+  item,
+  locale,
+  onLinkClick,
+}: {
+  item: NavDropdown;
+  locale: string;
+  onLinkClick: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex items-center justify-between w-full px-4 py-3 text-base font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
+      >
+        {item.label}
+        <ChevronDown
+          className={cn(
+            "w-4 h-4 transition-transform duration-200",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            {item.children.map((child) => (
+              <Link
+                key={child.href}
+                href={`/${locale}${child.href}`}
+                onClick={onLinkClick}
+                className="block pl-8 pr-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
+              >
+                {child.label}
+              </Link>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -110,15 +239,19 @@ export function Navbar({
 
           {/* Desktop Navigation */}
           <div className="hidden lg:flex items-center gap-1">
-            {links.map((link) => (
-              <Link
-                key={link.href}
-                href={link.href}
-                className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                {link.label}
-              </Link>
-            ))}
+            {links.map((item) =>
+              isDropdown(item) ? (
+                <DesktopDropdown key={item.label} item={item} locale={locale} />
+              ) : (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+                >
+                  {item.label}
+                </Link>
+              )
+            )}
           </div>
 
           {/* Desktop CTA + Language */}
@@ -162,16 +295,25 @@ export function Navbar({
             className="lg:hidden bg-background/95 backdrop-blur-xl border-b border-border overflow-hidden"
           >
             <div className="px-4 py-6 space-y-1">
-              {links.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  onClick={handleLinkClick}
-                  className="block px-4 py-3 text-base font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
-                >
-                  {link.label}
-                </Link>
-              ))}
+              {links.map((item) =>
+                isDropdown(item) ? (
+                  <MobileDropdown
+                    key={item.label}
+                    item={item}
+                    locale={locale}
+                    onLinkClick={handleLinkClick}
+                  />
+                ) : (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={handleLinkClick}
+                    className="block px-4 py-3 text-base font-medium text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
+                  >
+                    {item.label}
+                  </Link>
+                )
+              )}
               <div className="pt-4 space-y-3">
                 <div className="px-4 py-2">
                   <LanguageSwitcher locale={locale} />

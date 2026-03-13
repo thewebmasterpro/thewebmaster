@@ -104,6 +104,14 @@ export default function HomeClient({ dictionary, locale }: HomeClientProps) {
     { label: d.nav.process, href: "#processus" },
     { label: d.nav.about, href: "#about" },
     { label: d.nav.faq, href: "#faq" },
+    {
+      label: d.nav.tools,
+      children: [
+        { label: d.nav.seoAudit, href: "/seo-audit" },
+        { label: d.nav.perfAudit, href: "/performance-audit" },
+        { label: d.nav.secAudit, href: "/security-audit" },
+      ],
+    },
     { label: d.nav.contact, href: "#contact" },
   ];
 
