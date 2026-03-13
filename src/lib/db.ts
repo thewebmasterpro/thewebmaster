@@ -72,6 +72,20 @@ export function getLeadsByEmail(email: string): AuditLead[] {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+export function getAllLeads(): AuditLead[] {
+  return readLeads().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getLeadsStats() {
+  const leads = readLeads();
+  const total = leads.length;
+  const uniqueEmails = new Set(leads.map((l) => l.email)).size;
+  const byType = { seo: 0, performance: 0, security: 0 };
+  for (const l of leads) byType[l.auditType]++;
+  const pdfSent = leads.filter((l) => l.pdfSent).length;
+  return { total, uniqueEmails, byType, pdfSent };
+}
+
 export function markPdfSent(id: number): void {
   const leads = readLeads();
   const lead = leads.find((l) => l.id === id);
