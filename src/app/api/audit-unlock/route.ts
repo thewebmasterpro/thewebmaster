@@ -91,9 +91,6 @@ export async function POST(request: NextRequest) {
     let emailSent = false;
     if (process.env.RESEND_API_KEY) {
       try {
-        const { Resend } = await import("resend");
-        const resend = new Resend(process.env.RESEND_API_KEY);
-
         const subject = getAuditEmailSubject({
           hostname,
           auditType: body.auditType,
@@ -110,13 +107,20 @@ export async function POST(request: NextRequest) {
           locale,
         });
 
-        await resend.emails.send({
-          from: "The Webmaster <noreply@thewebmaster.pro>",
-          to: [body.email],
-          subject,
-          html,
+        const emailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          },
+          body: JSON.stringify({
+            from: "The Webmaster <noreply@thewebmaster.pro>",
+            to: [body.email],
+            subject,
+            html,
+          }),
         });
-        emailSent = true;
+        emailSent = emailRes.ok;
       } catch (emailError) {
         console.error("[AuditUnlock] Email send failed:", emailError);
       }
