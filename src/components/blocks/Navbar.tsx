@@ -25,14 +25,69 @@ function isDropdown(item: NavItem): item is NavDropdown {
   return "children" in item;
 }
 
-const toolsMenu: NavDropdown = {
-  label: "Outils",
-  children: [
-    { label: "Audit SEO", href: "/seo-audit" },
-    { label: "Audit Performance", href: "/performance-audit" },
-    { label: "Audit Sécurité", href: "/security-audit" },
-  ],
+const navLabels = {
+  fr: {
+    tools: "Outils",
+    seo: "Audit SEO",
+    perf: "Audit Performance",
+    sec: "Audit Sécurité",
+    home: "Accueil",
+    services: "Services",
+    sos: "Dépannage",
+    process: "Processus",
+    about: "À propos",
+    faq: "FAQ",
+    contact: "Contact",
+  },
+  en: {
+    tools: "Tools",
+    seo: "SEO Audit",
+    perf: "Performance Audit",
+    sec: "Security Audit",
+    home: "Home",
+    services: "Services",
+    sos: "Support",
+    process: "Process",
+    about: "About",
+    faq: "FAQ",
+    contact: "Contact",
+  },
+  nl: {
+    tools: "Tools",
+    seo: "SEO Audit",
+    perf: "Prestatie Audit",
+    sec: "Beveiligingsaudit",
+    home: "Home",
+    services: "Diensten",
+    sos: "Ondersteuning",
+    process: "Proces",
+    about: "Over ons",
+    faq: "FAQ",
+    contact: "Contact",
+  },
 };
+
+function getDefaultLinks(locale: string): NavItem[] {
+  const t = navLabels[locale as keyof typeof navLabels] || navLabels.fr;
+  const toolsMenu: NavDropdown = {
+    label: t.tools,
+    children: [
+      { label: t.seo, href: "/seo-audit" },
+      { label: t.perf, href: "/performance-audit" },
+      { label: t.sec, href: "/security-audit" },
+    ],
+  };
+  return [
+    { label: t.home, href: "#accueil" },
+    { label: t.services, href: "#services" },
+    { label: t.sos, href: "#sos" },
+    { label: t.process, href: "#processus" },
+    { label: t.about, href: "#about" },
+    { label: t.faq, href: "#faq" },
+    toolsMenu,
+    { label: t.contact, href: "#contact" },
+  ];
+}
 
 interface NavbarProps {
   logo?: React.ReactNode;
@@ -42,17 +97,6 @@ interface NavbarProps {
   locale?: string;
   className?: string;
 }
-
-const defaultLinks: NavItem[] = [
-  { label: "Accueil", href: "#accueil" },
-  { label: "Services", href: "#services" },
-  { label: "Dépannage", href: "#sos" },
-  { label: "Processus", href: "#processus" },
-  { label: "À propos", href: "#about" },
-  { label: "FAQ", href: "#faq" },
-  toolsMenu,
-  { label: "Contact", href: "#contact" },
-];
 
 function LanguageSwitcher({ locale }: { locale: string }) {
   const pathname = usePathname();
@@ -195,12 +239,13 @@ function MobileDropdown({
 
 export function Navbar({
   logo,
-  links = defaultLinks,
+  links,
   ctaLabel = "Devis gratuit",
   ctaHref = "#contact",
   locale = "fr",
   className,
 }: NavbarProps) {
+  const navLinks = links ?? getDefaultLinks(locale);
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
@@ -239,7 +284,7 @@ export function Navbar({
 
           {/* Desktop Navigation */}
           <div className="hidden lg:flex items-center gap-1">
-            {links.map((item) =>
+            {navLinks.map((item) =>
               isDropdown(item) ? (
                 <DesktopDropdown key={item.label} item={item} locale={locale} />
               ) : (
@@ -295,7 +340,7 @@ export function Navbar({
             className="lg:hidden bg-background/95 backdrop-blur-xl border-b border-border overflow-hidden"
           >
             <div className="px-4 py-6 space-y-1">
-              {links.map((item) =>
+              {navLinks.map((item) =>
                 isDropdown(item) ? (
                   <MobileDropdown
                     key={item.label}

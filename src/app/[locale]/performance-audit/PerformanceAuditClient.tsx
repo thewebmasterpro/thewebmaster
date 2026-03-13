@@ -33,6 +33,8 @@ import {
   Wifi,
   WifiOff,
   Cable,
+  Search,
+  Shield,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -903,6 +905,8 @@ export default function PerformanceAuditClient({ locale = "fr" }: { locale?: str
     setStatus("loading");
     setResult(null);
     setErrorMsg("");
+    setUnlocked(false);
+    sessionStorage.removeItem("audit-unlocked-performance");
 
     try {
       const res = await fetch("/api/performance-audit", {
@@ -1152,6 +1156,33 @@ export default function PerformanceAuditClient({ locale = "fr" }: { locale?: str
             </div>
           </div>
         )}
+
+        {/* Other tools */}
+        <div className="mt-12 pt-8 border-t border-border/30">
+          <h3 className="text-lg font-semibold text-center mb-6">{t.otherTools}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+            <Link
+              href={`/${locale}/seo-audit`}
+              className="p-5 rounded-xl border border-border/50 bg-card/50 hover:bg-card hover:border-primary/30 transition-all group"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <Search className="w-5 h-5 text-primary" />
+                <span className="font-semibold group-hover:text-primary transition-colors">{t.seoAudit}</span>
+              </div>
+              <p className="text-sm text-muted-foreground">{t.seoAuditDesc}</p>
+            </Link>
+            <Link
+              href={`/${locale}/security-audit`}
+              className="p-5 rounded-xl border border-border/50 bg-card/50 hover:bg-card hover:border-primary/30 transition-all group"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <Shield className="w-5 h-5 text-primary" />
+                <span className="font-semibold group-hover:text-primary transition-colors">{t.secAudit}</span>
+              </div>
+              <p className="text-sm text-muted-foreground">{t.secAuditDesc}</p>
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

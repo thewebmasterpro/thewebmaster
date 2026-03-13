@@ -108,6 +108,11 @@ export const translations = {
     unlockSending: "Envoi en cours...",
     unlockSuccess: "Rapport envoye ! Consultez vos resultats ci-dessous.",
     unlockError: "Une erreur est survenue. Veuillez reessayer.",
+    otherTools: "Nos autres outils",
+    perfAudit: "Audit Performance",
+    perfAuditDesc: "Core Web Vitals, ressources, images et optimisations",
+    secAudit: "Audit Securite",
+    secAuditDesc: "SSL, headers, vulnerabilites et conformite",
   },
   en: {
     toolName: "SEO Audit Tool",
@@ -218,6 +223,11 @@ export const translations = {
     unlockSending: "Sending...",
     unlockSuccess: "Report sent! View your results below.",
     unlockError: "An error occurred. Please try again.",
+    otherTools: "Our other tools",
+    perfAudit: "Performance Audit",
+    perfAuditDesc: "Core Web Vitals, resources, images and optimizations",
+    secAudit: "Security Audit",
+    secAuditDesc: "SSL, headers, vulnerabilities and compliance",
   },
   nl: {
     toolName: "SEO Audit Tool",
@@ -328,6 +338,11 @@ export const translations = {
     unlockSending: "Verzenden...",
     unlockSuccess: "Rapport verzonden! Bekijk uw resultaten hieronder.",
     unlockError: "Er is een fout opgetreden. Probeer het opnieuw.",
+    otherTools: "Onze andere tools",
+    perfAudit: "Prestatie Audit",
+    perfAuditDesc: "Core Web Vitals, bronnen, afbeeldingen en optimalisaties",
+    secAudit: "Beveiligingsaudit",
+    secAuditDesc: "SSL, headers, kwetsbaarheden en compliance",
   },
 };
 

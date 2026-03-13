@@ -853,6 +853,8 @@ export default function SeoAuditClient({ locale = "fr" }: { locale?: string }) {
     setStatus("loading");
     setResult(null);
     setErrorMsg("");
+    setUnlocked(false);
+    sessionStorage.removeItem("audit-unlocked-seo");
 
     try {
       const res = await fetch("/api/seo-audit", {
@@ -1091,6 +1093,33 @@ export default function SeoAuditClient({ locale = "fr" }: { locale?: string }) {
             </div>
           </div>
         )}
+
+        {/* Other tools */}
+        <div className="mt-12 pt-8 border-t border-border/30">
+          <h3 className="text-lg font-semibold text-center mb-6">{t.otherTools}</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl mx-auto">
+            <Link
+              href={`/${locale}/performance-audit`}
+              className="p-5 rounded-xl border border-border/50 bg-card/50 hover:bg-card hover:border-primary/30 transition-all group"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <Zap className="w-5 h-5 text-primary" />
+                <span className="font-semibold group-hover:text-primary transition-colors">{t.perfAudit}</span>
+              </div>
+              <p className="text-sm text-muted-foreground">{t.perfAuditDesc}</p>
+            </Link>
+            <Link
+              href={`/${locale}/security-audit`}
+              className="p-5 rounded-xl border border-border/50 bg-card/50 hover:bg-card hover:border-primary/30 transition-all group"
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <ShieldCheck className="w-5 h-5 text-primary" />
+                <span className="font-semibold group-hover:text-primary transition-colors">{t.secAudit}</span>
+              </div>
+              <p className="text-sm text-muted-foreground">{t.secAuditDesc}</p>
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );
