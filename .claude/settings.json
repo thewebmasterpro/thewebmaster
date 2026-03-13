@@ -1,14 +1,12 @@
 {
   "permissions": {
-    "allow": [
-      "Bash(sips -g pixelWidth -g pixelHeight /Volumes/DEV/thewebmaster/public/images/hero-chess-king-gold.png)",
-      "Bash(identify -verbose /Volumes/DEV/thewebmaster/public/images/hero-chess-king-gold.png)",
-      "Bash(npx eslint src/app/api/security-audit/route.ts src/app/[locale]/security-audit/SecurityAuditClient.tsx)",
-      "Read(//Volumes/DEV/thewebmaster/**)"
-    ],
     "additionalDirectories": [
       "/Volumes/DEV/thewebmaster/src/app/api",
       "/Volumes/DEV/thewebmaster/src/app/[locale]"
+    ],
+    "allow": [
+      "Bash(sips -g pixelWidth -g pixelHeight /Volumes/DEV/thewebmaster/public/images/hero-chess-king-gold.png)",
+      "Bash(identify -verbose /Volumes/DEV/thewebmaster/public/images/hero-chess-king-gold.png)"
     ]
   }
 }

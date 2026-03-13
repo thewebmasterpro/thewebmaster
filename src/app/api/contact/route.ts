@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Resend } from "resend";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { verifyCsrf } from "@/lib/csrf";
 
@@ -71,55 +72,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
     const subjectLine = body.subject
       ? `[TheWebmaster] ${body.subject}`
       : "[TheWebmaster] Nouveau message de contact";
 
-    const emailRes = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      },
-      body: JSON.stringify({
-        from: "The Webmaster <noreply@thewebmaster.pro>",
-        to: ["contact@thewebmaster.pro"],
-        reply_to: body.email,
-        subject: subjectLine,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #b8860b; border-bottom: 2px solid #b8860b; padding-bottom: 10px;">
-              Nouveau message de contact
-            </h2>
-            <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
-              <tr>
-                <td style="padding: 8px 12px; font-weight: bold; color: #555; width: 100px;">Nom</td>
-                <td style="padding: 8px 12px;">${body.name}</td>
-              </tr>
-              <tr style="background: #f9f9f9;">
-                <td style="padding: 8px 12px; font-weight: bold; color: #555;">Email</td>
-                <td style="padding: 8px 12px;"><a href="mailto:${body.email}">${body.email}</a></td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 12px; font-weight: bold; color: #555;">Sujet</td>
-                <td style="padding: 8px 12px;">${body.subject || "Non spécifié"}</td>
-              </tr>
-            </table>
-            <div style="margin-top: 20px; padding: 16px; background: #f5f5f5; border-radius: 8px;">
-              <p style="font-weight: bold; color: #555; margin: 0 0 8px;">Message :</p>
-              <p style="margin: 0; white-space: pre-wrap;">${body.message}</p>
-            </div>
-            <p style="margin-top: 24px; font-size: 12px; color: #999;">
-              Envoyé depuis le formulaire de contact de thewebmaster.pro
-            </p>
+    await resend.emails.send({
+      from: "The Webmaster <noreply@thewebmaster.pro>",
+      to: ["contact@thewebmaster.pro"],
+      replyTo: body.email,
+      subject: subjectLine,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #b8860b; border-bottom: 2px solid #b8860b; padding-bottom: 10px;">
+            Nouveau message de contact
+          </h2>
+          <table style="width: 100%; border-collapse: collapse; margin-top: 20px;">
+            <tr>
+              <td style="padding: 8px 12px; font-weight: bold; color: #555; width: 100px;">Nom</td>
+              <td style="padding: 8px 12px;">${body.name}</td>
+            </tr>
+            <tr style="background: #f9f9f9;">
+              <td style="padding: 8px 12px; font-weight: bold; color: #555;">Email</td>
+              <td style="padding: 8px 12px;"><a href="mailto:${body.email}">${body.email}</a></td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 12px; font-weight: bold; color: #555;">Sujet</td>
+              <td style="padding: 8px 12px;">${body.subject || "Non spécifié"}</td>
+            </tr>
+          </table>
+          <div style="margin-top: 20px; padding: 16px; background: #f5f5f5; border-radius: 8px;">
+            <p style="font-weight: bold; color: #555; margin: 0 0 8px;">Message :</p>
+            <p style="margin: 0; white-space: pre-wrap;">${body.message}</p>
           </div>
-        `,
-      }),
+          <p style="margin-top: 24px; font-size: 12px; color: #999;">
+            Envoyé depuis le formulaire de contact de thewebmaster.pro
+          </p>
+        </div>
+      `,
     });
-
-    if (!emailRes.ok) {
-      throw new Error(`Resend API error: ${emailRes.status}`);
-    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

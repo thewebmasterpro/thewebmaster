@@ -1,23 +1,12 @@
 import path from "path";
 import fs from "fs";
 
-function getDataDir() {
-  return path.join(process.cwd(), "data");
-}
+const DATA_DIR = path.join(process.cwd(), "data");
+const DB_PATH = path.join(DATA_DIR, "leads.json");
 
-function getDbPath() {
-  return path.join(getDataDir(), "leads.json");
-}
-
-function ensureDataDir() {
-  try {
-    const dir = getDataDir();
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-  } catch {
-    // Silently fail if directory creation is not possible
-  }
+// Ensure data directory exists
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
 interface AuditLead {
@@ -45,9 +34,8 @@ export interface AuditLeadInput {
 
 function readLeads(): AuditLead[] {
   try {
-    const dbPath = getDbPath();
-    if (!fs.existsSync(dbPath)) return [];
-    const raw = fs.readFileSync(dbPath, "utf-8");
+    if (!fs.existsSync(DB_PATH)) return [];
+    const raw = fs.readFileSync(DB_PATH, "utf-8");
     return JSON.parse(raw);
   } catch {
     return [];
@@ -55,8 +43,7 @@ function readLeads(): AuditLead[] {
 }
 
 function writeLeads(leads: AuditLead[]): void {
-  ensureDataDir();
-  fs.writeFileSync(getDbPath(), JSON.stringify(leads, null, 2), "utf-8");
+  fs.writeFileSync(DB_PATH, JSON.stringify(leads, null, 2), "utf-8");
 }
 
 export function insertAuditLead(input: AuditLeadInput & { pdfSent?: boolean }): number {
@@ -83,20 +70,6 @@ export function getLeadsByEmail(email: string): AuditLead[] {
   return readLeads()
     .filter((l) => l.email === email)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export function getAllLeads(): AuditLead[] {
-  return readLeads().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export function getLeadsStats() {
-  const leads = readLeads();
-  const total = leads.length;
-  const uniqueEmails = new Set(leads.map((l) => l.email)).size;
-  const byType = { seo: 0, performance: 0, security: 0 };
-  for (const l of leads) byType[l.auditType]++;
-  const pdfSent = leads.filter((l) => l.pdfSent).length;
-  return { total, uniqueEmails, byType, pdfSent };
 }
 
 export function markPdfSent(id: number): void {
