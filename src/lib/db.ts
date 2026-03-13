@@ -1,12 +1,23 @@
 import path from "path";
 import fs from "fs";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "leads.json");
+function getDataDir() {
+  return path.join(process.cwd(), "data");
+}
 
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+function getDbPath() {
+  return path.join(getDataDir(), "leads.json");
+}
+
+function ensureDataDir() {
+  try {
+    const dir = getDataDir();
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch {
+    // Silently fail if directory creation is not possible
+  }
 }
 
 interface AuditLead {
@@ -34,8 +45,9 @@ export interface AuditLeadInput {
 
 function readLeads(): AuditLead[] {
   try {
-    if (!fs.existsSync(DB_PATH)) return [];
-    const raw = fs.readFileSync(DB_PATH, "utf-8");
+    const dbPath = getDbPath();
+    if (!fs.existsSync(dbPath)) return [];
+    const raw = fs.readFileSync(dbPath, "utf-8");
     return JSON.parse(raw);
   } catch {
     return [];
@@ -43,7 +55,8 @@ function readLeads(): AuditLead[] {
 }
 
 function writeLeads(leads: AuditLead[]): void {
-  fs.writeFileSync(DB_PATH, JSON.stringify(leads, null, 2), "utf-8");
+  ensureDataDir();
+  fs.writeFileSync(getDbPath(), JSON.stringify(leads, null, 2), "utf-8");
 }
 
 export function insertAuditLead(input: AuditLeadInput & { pdfSent?: boolean }): number {
