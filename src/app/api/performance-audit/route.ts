@@ -31,6 +31,14 @@ interface ResourceStats {
   preloadedFonts: number;
 }
 
+interface CMSInfo {
+  name: string | null;
+  version: string | null;
+  isOutdated: boolean | null;
+  theme: { name: string; version?: string } | null;
+  plugins: { name: string; version?: string }[];
+}
+
 interface PerfAuditResult {
   url: string;
   timestamp: string;
@@ -42,6 +50,7 @@ interface PerfAuditResult {
   htmlSize: number;
   resources: ResourceStats;
   technologies: string[];
+  cmsInfo: CMSInfo | null;
   serverInfo: {
     server: string | null;
     poweredBy: string | null;
@@ -117,6 +126,298 @@ function detectTechnologies(html: string, headers: Headers): string[] {
   }
 
   return [...new Set(techs)];
+}
+
+// Known latest CMS versions (updated periodically)
+const KNOWN_LATEST_VERSIONS: Record<string, string> = {
+  WordPress: "6.7",
+  Joomla: "5.2",
+  Drupal: "11.1",
+  PrestaShop: "8.2",
+  Magento: "2.4",
+  TYPO3: "13.4",
+};
+
+// Detect CMS details: name, version, theme, plugins
+function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo | null {
+  const lower = html.toLowerCase();
+  const origin = new URL(baseUrl).origin;
+
+  // ── WordPress ──
+  if (lower.includes("wp-content") || lower.includes("wp-includes")) {
+    const versionMeta = html.match(/content="WordPress\s+([\d.]+)"/i);
+    const versionGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["'][^"']*WordPress\s+([\d.]+)/i);
+    const version = versionMeta?.[1] || versionGen?.[1] || null;
+
+    const themeMatch = html.match(/wp-content\/themes\/([^/'"?]+)/i);
+    const themeVersionMatch = themeMatch
+      ? html.match(new RegExp(`wp-content/themes/${themeMatch[1]}[^'"]*[?&]ver(?:sion)?=([\\.\\d]+)`, "i"))
+      : null;
+    const theme = themeMatch
+      ? { name: themeMatch[1], version: themeVersionMatch?.[1] }
+      : null;
+
+    const pluginMatches = html.match(/wp-content\/plugins\/([^/'"?]+)/gi) || [];
+    const pluginNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of pluginMatches) {
+      const name = m.match(/plugins\/([^/'"?]+)/i)?.[1];
+      if (name && !pluginNames.has(name)) {
+        pluginNames.add(name);
+        const verMatch = html.match(new RegExp(`wp-content/plugins/${name}[^'"]*[?&]ver(?:sion)?=([\\.\\d]+)`, "i"));
+        plugins.push({ name, version: verMatch?.[1] });
+      }
+    }
+
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.WordPress) < 0 : null;
+    return { name: "WordPress", version, isOutdated, theme, plugins };
+  }
+
+  // ── Joomla ──
+  if (lower.includes("joomla") || lower.includes("/media/system/js/") || lower.includes("/templates/") && lower.includes("/media/")) {
+    const joomlaGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Joomla!\s*([\d.]*)/i);
+    const version = joomlaGen?.[1] || null;
+
+    const templateMatch = html.match(/\/templates\/([^/'"?]+)/i);
+    const theme = templateMatch ? { name: templateMatch[1] } : null;
+
+    const pluginMatches = html.match(/\/(?:modules|plugins|components)\/(?:mod_|plg_|com_)([^/'"?]+)/gi) || [];
+    const pluginNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of pluginMatches) {
+      const name = m.match(/(?:mod_|plg_|com_)([^/'"?]+)/i)?.[1];
+      if (name && !pluginNames.has(name)) {
+        pluginNames.add(name);
+        plugins.push({ name });
+      }
+    }
+
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.Joomla) < 0 : null;
+    return { name: "Joomla", version, isOutdated, theme, plugins };
+  }
+
+  // ── Drupal ──
+  if (lower.includes("drupal") || lower.includes("/sites/default/files/") || lower.includes("drupal.js")) {
+    const drupalGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Drupal\s*([\d.]*)/i);
+    const version = drupalGen?.[1] || null;
+
+    const themeMatch = html.match(/\/themes\/(?:custom\/|contrib\/)?([^/'"?]+)/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+
+    const moduleMatches = html.match(/\/modules\/(?:custom\/|contrib\/)?([^/'"?]+)/gi) || [];
+    const moduleNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of moduleMatches) {
+      const name = m.match(/\/([^/'"?]+)$/i)?.[1];
+      if (name && !moduleNames.has(name)) {
+        moduleNames.add(name);
+        plugins.push({ name });
+      }
+    }
+
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.Drupal) < 0 : null;
+    return { name: "Drupal", version, isOutdated, theme, plugins };
+  }
+
+  // ── PrestaShop ──
+  if (lower.includes("prestashop") || lower.includes("/themes/") && lower.includes("/modules/") && lower.includes("prestashop")) {
+    const psGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']PrestaShop\s*([\d.]*)/i);
+    const version = psGen?.[1] || null;
+
+    const themeMatch = html.match(/\/themes\/([^/'"?]+)/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+
+    const moduleMatches = html.match(/\/modules\/([^/'"?]+)/gi) || [];
+    const moduleNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of moduleMatches) {
+      const name = m.match(/\/modules\/([^/'"?]+)/i)?.[1];
+      if (name && !moduleNames.has(name)) {
+        moduleNames.add(name);
+        plugins.push({ name });
+      }
+    }
+
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.PrestaShop) < 0 : null;
+    return { name: "PrestaShop", version, isOutdated, theme, plugins };
+  }
+
+  // ── Shopify ──
+  if (lower.includes("shopify") || lower.includes("cdn.shopify.com")) {
+    const themeMatch = html.match(/Shopify\.theme\s*=\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i);
+    const themeVersionMatch = html.match(/Shopify\.theme\s*=\s*\{[^}]*"theme_store_id"\s*:\s*(\d+)/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+    return { name: "Shopify", version: null, isOutdated: null, theme, plugins: [] };
+  }
+
+  // ── Wix ──
+  if (lower.includes("wix.com") || lower.includes("_wix")) {
+    return { name: "Wix", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
+
+  // ── Squarespace ──
+  if (lower.includes("squarespace")) {
+    return { name: "Squarespace", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
+
+  // ── Webflow ──
+  if (lower.includes("webflow")) {
+    return { name: "Webflow", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
+
+  // ── Magento ──
+  if (lower.includes("magento") || lower.includes("mage-") || lower.includes("/static/frontend/")) {
+    const magentoVersion = html.match(/Magento\/([\d.]+)/i);
+    const version = magentoVersion?.[1] || null;
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.Magento) < 0 : null;
+    return { name: "Magento", version, isOutdated, theme: null, plugins: [] };
+  }
+
+  // ── TYPO3 ──
+  if (lower.includes("typo3") || lower.includes("/typo3conf/") || lower.includes("/typo3temp/")) {
+    const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']TYPO3[^"']*([\d.]+)/i);
+    const version = gen?.[1] || null;
+    const isOutdated = version ? versionCompare(version, KNOWN_LATEST_VERSIONS.TYPO3) < 0 : null;
+    return { name: "TYPO3", version, isOutdated, theme: null, plugins: [] };
+  }
+
+  return null;
+}
+
+function versionCompare(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+// CMS-specific performance checks
+function checkCMS(cmsInfo: CMSInfo | null, html: string): PerfCheck[] {
+  const checks: PerfCheck[] = [];
+  if (!cmsInfo) return checks;
+
+  // CMS detected — info check
+  checks.push({
+    id: "cms-detected",
+    category: "cms",
+    name: `CMS détecté : ${cmsInfo.name}`,
+    status: "info",
+    description: cmsInfo.version
+      ? `${cmsInfo.name} ${cmsInfo.version} détecté.${cmsInfo.theme ? ` Thème : ${cmsInfo.theme.name}${cmsInfo.theme.version ? ` v${cmsInfo.theme.version}` : ""}.` : ""}${cmsInfo.plugins.length > 0 ? ` ${cmsInfo.plugins.length} extension(s) détectée(s).` : ""}`
+      : `${cmsInfo.name} détecté.${cmsInfo.theme ? ` Thème : ${cmsInfo.theme.name}.` : ""}`,
+    value: [
+      cmsInfo.version ? `Version: ${cmsInfo.version}` : null,
+      cmsInfo.theme ? `Thème: ${cmsInfo.theme.name}${cmsInfo.theme.version ? ` v${cmsInfo.theme.version}` : ""}` : null,
+      cmsInfo.plugins.length > 0
+        ? `Extensions: ${cmsInfo.plugins.map((p) => `${p.name}${p.version ? ` v${p.version}` : ""}`).join(", ")}`
+        : null,
+    ].filter(Boolean).join(" | "),
+  });
+
+  // Outdated CMS version
+  if (cmsInfo.isOutdated === true) {
+    checks.push({
+      id: "cms-outdated",
+      category: "cms",
+      name: `${cmsInfo.name} n'est pas à jour`,
+      status: "fail",
+      severity: "high",
+      description: `${cmsInfo.name} ${cmsInfo.version} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS[cmsInfo.name!] || "inconnue"}. Les anciennes versions contiennent des failles de sécurité et des problèmes de performance.`,
+      recommendation: `Mettez à jour ${cmsInfo.name} vers la dernière version (${KNOWN_LATEST_VERSIONS[cmsInfo.name!] || "dernière"}) pour bénéficier des optimisations de performance et correctifs de sécurité.`,
+    });
+  } else if (cmsInfo.isOutdated === false) {
+    checks.push({
+      id: "cms-uptodate",
+      category: "cms",
+      name: `${cmsInfo.name} est à jour`,
+      status: "pass",
+      description: `${cmsInfo.name} ${cmsInfo.version} est à jour.`,
+    });
+  }
+
+  // Too many plugins (performance impact)
+  if (cmsInfo.plugins.length > 20) {
+    checks.push({
+      id: "cms-too-many-plugins",
+      category: "cms",
+      name: "Trop d'extensions",
+      status: "fail",
+      severity: "high",
+      description: `${cmsInfo.plugins.length} extensions détectées. Un nombre élevé de plugins ralentit significativement le temps de chargement, augmente les requêtes HTTP et la taille de la page.`,
+      value: `${cmsInfo.plugins.length} extensions`,
+      recommendation: "Désactivez et supprimez les extensions non essentielles. Remplacez plusieurs petits plugins par une solution tout-en-un quand c'est possible.",
+    });
+  } else if (cmsInfo.plugins.length > 10) {
+    checks.push({
+      id: "cms-many-plugins",
+      category: "cms",
+      name: "Nombre élevé d'extensions",
+      status: "warn",
+      severity: "medium",
+      description: `${cmsInfo.plugins.length} extensions détectées. Chaque extension ajoute du poids et des requêtes supplémentaires.`,
+      value: `${cmsInfo.plugins.length} extensions`,
+      recommendation: "Auditez vos extensions et désactivez celles qui ne sont pas indispensables. Vérifiez que chaque extension est bien optimisée.",
+    });
+  }
+
+  // WordPress-specific perf checks
+  if (cmsInfo.name === "WordPress") {
+    const lower = html.toLowerCase();
+
+    // Check for caching plugin
+    const hasCachingPlugin = cmsInfo.plugins.some((p) =>
+      /cache|w3-total|wp-rocket|wp-super-cache|litespeed|autoptimize|breeze|swift|hummingbird/i.test(p.name)
+    );
+    if (!hasCachingPlugin) {
+      checks.push({
+        id: "wp-no-cache-plugin",
+        category: "cms",
+        name: "Pas de plugin de cache détecté",
+        status: "warn",
+        severity: "high",
+        description: "Aucun plugin de cache WordPress n'a été détecté. Le cache réduit drastiquement le temps de chargement.",
+        recommendation: "Installez un plugin de cache : WP Rocket (premium), LiteSpeed Cache, W3 Total Cache, ou WP Super Cache (gratuits).",
+      });
+    }
+
+    // Check for image optimization plugin
+    const hasImagePlugin = cmsInfo.plugins.some((p) =>
+      /smush|imagify|shortpixel|ewww|optim|webp|tinypng/i.test(p.name)
+    );
+    if (!hasImagePlugin) {
+      checks.push({
+        id: "wp-no-image-optim",
+        category: "cms",
+        name: "Pas de plugin d'optimisation d'images",
+        status: "warn",
+        severity: "medium",
+        description: "Aucun plugin d'optimisation d'images détecté. Les images non optimisées sont la première cause de lenteur.",
+        recommendation: "Installez Imagify, ShortPixel, ou Smush pour compresser et convertir vos images en WebP automatiquement.",
+      });
+    }
+
+    // Check for render-blocking WP styles
+    const wpBlockCss = (lower.match(/wp-content\/[^'"]*\.css/gi) || []).length;
+    if (wpBlockCss > 8) {
+      checks.push({
+        id: "wp-too-many-css",
+        category: "cms",
+        name: "Trop de fichiers CSS WordPress",
+        status: "warn",
+        severity: "medium",
+        description: `${wpBlockCss} fichiers CSS WordPress détectés. Chaque fichier CSS bloque le rendu de la page.`,
+        value: `${wpBlockCss} fichiers CSS`,
+        recommendation: "Utilisez un plugin de minification/concaténation (Autoptimize, WP Rocket) pour combiner les CSS en un seul fichier.",
+      });
+    }
+  }
+
+  return checks;
 }
 
 // Helper: detect if site uses a modern framework (Next.js, Nuxt, etc.)
@@ -1033,6 +1334,7 @@ export async function POST(request: NextRequest) {
     const resources = extractResourceStats(html);
     const thirdPartyDomains = extractThirdPartyDomains(html, hostname);
     const technologies = detectTechnologies(html, headers);
+    const cmsInfo = detectCMSInfo(html, headers, targetUrl.toString());
 
     // Run all checks
     const serverChecks = checkServerNetwork(html, headers, responseTime, pageSize, isHttps);
@@ -1042,6 +1344,7 @@ export async function POST(request: NextRequest) {
     const renderingChecks = checkRendering(html);
     const optimizationChecks = checkOptimization(html, thirdPartyDomains);
     const cwvChecks = checkCoreWebVitals(html, responseTime, resources, pageSize);
+    const cmsChecks = checkCMS(cmsInfo, html);
 
     const allChecks = [
       ...cwvChecks,
@@ -1051,6 +1354,7 @@ export async function POST(request: NextRequest) {
       ...fontChecks,
       ...renderingChecks,
       ...optimizationChecks,
+      ...cmsChecks,
     ];
 
     const { score, grade } = calculateScore(allChecks);
@@ -1074,6 +1378,7 @@ export async function POST(request: NextRequest) {
       htmlSize: htmlSizeKB,
       resources,
       technologies,
+      cmsInfo,
       serverInfo: {
         server: headers.get("server"),
         poweredBy: headers.get("x-powered-by"),

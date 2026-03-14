@@ -35,6 +35,9 @@ import {
   Cable,
   Search,
   Shield,
+  LayoutGrid,
+  Puzzle,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -67,6 +70,14 @@ interface ResourceStats {
   preloadedFonts: number;
 }
 
+interface CMSInfo {
+  name: string | null;
+  version: string | null;
+  isOutdated: boolean | null;
+  theme: { name: string; version?: string } | null;
+  plugins: { name: string; version?: string }[];
+}
+
 interface PerfAuditResult {
   url: string;
   timestamp: string;
@@ -78,6 +89,7 @@ interface PerfAuditResult {
   htmlSize: number;
   resources: ResourceStats;
   technologies: string[];
+  cmsInfo: CMSInfo | null;
   serverInfo: {
     server: string | null;
     poweredBy: string | null;
@@ -101,6 +113,7 @@ function getCategoryLabels(t: PerfTranslations) {
     fonts: { label: t.catFonts, icon: Type },
     rendering: { label: t.catRendering, icon: Layers },
     optimization: { label: t.catOptimization, icon: Rocket },
+    cms: { label: "CMS", icon: LayoutGrid },
   } as Record<string, { label: string; icon: typeof Gauge }>;
 }
 
@@ -773,7 +786,12 @@ Cable/Fibre : ${result.estimatedLoadTime.cable}
 ${quickWins.length > 0 ? `${t.reportQuickWins}\n${"-".repeat(30)}\n${quickWins.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
 ${warnings.length > 0 ? `${t.reportRecommended}\n${"-".repeat(30)}\n${warnings.map((c) => `- [${c.severity?.toUpperCase()}] ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
 ${improvements.length > 0 ? `${t.reportMinor}\n${"-".repeat(30)}\n${improvements.map((c) => `- ${c.name}: ${c.recommendation || c.description}`).join("\n")}\n` : ""}
-${t.reportTechDetected}
+${result.cmsInfo ? `CMS
+${"-".repeat(30)}
+${result.cmsInfo.name}${result.cmsInfo.version ? ` v${result.cmsInfo.version}` : ""}${result.cmsInfo.isOutdated === true ? " (OBSOLETE)" : result.cmsInfo.isOutdated === false ? " (a jour)" : ""}
+${result.cmsInfo.theme ? `Theme : ${result.cmsInfo.theme.name}${result.cmsInfo.theme.version ? ` v${result.cmsInfo.theme.version}` : ""}` : ""}
+${result.cmsInfo.plugins.length > 0 ? `Extensions (${result.cmsInfo.plugins.length}) : ${result.cmsInfo.plugins.map((p) => `${p.name}${p.version ? ` v${p.version}` : ""}`).join(", ")}` : ""}
+` : ""}${t.reportTechDetected}
 ${"-".repeat(30)}
 ${result.technologies.join(", ") || t.reportNone}
 
@@ -1079,6 +1097,61 @@ export default function PerformanceAuditClient({ locale = "fr" }: { locale?: str
             <ServerInfo info={result.serverInfo} t={t} />
 
             <ResourceBreakdown resources={result.resources} t={t} />
+
+            {/* CMS Info */}
+            {result.cmsInfo && (
+              <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
+                <div className="flex items-center gap-2 mb-4">
+                  <LayoutGrid className="w-5 h-5 text-primary" />
+                  <h3 className="text-lg font-semibold">CMS : {result.cmsInfo.name}</h3>
+                  {result.cmsInfo.version && (
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      result.cmsInfo.isOutdated === true
+                        ? "bg-red-500/10 text-red-500 border border-red-500/20"
+                        : result.cmsInfo.isOutdated === false
+                        ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                        : "bg-muted/50 text-muted-foreground border border-border/30"
+                    }`}>
+                      v{result.cmsInfo.version}
+                      {result.cmsInfo.isOutdated === true && " (obsolete)"}
+                      {result.cmsInfo.isOutdated === false && " (a jour)"}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-3">
+                  {result.cmsInfo.theme && (
+                    <div className="flex items-center gap-2">
+                      <Palette className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground">Theme :</span>
+                      <span className="text-sm font-medium">
+                        {result.cmsInfo.theme.name}
+                        {result.cmsInfo.theme.version && ` v${result.cmsInfo.theme.version}`}
+                      </span>
+                    </div>
+                  )}
+                  {result.cmsInfo.plugins.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <Puzzle className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">
+                          Extensions ({result.cmsInfo.plugins.length}) :
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {result.cmsInfo.plugins.map((plugin) => (
+                          <span
+                            key={plugin.name}
+                            className="px-2 py-0.5 rounded-full text-xs bg-muted/50 text-muted-foreground border border-border/30"
+                          >
+                            {plugin.name}{plugin.version ? ` v${plugin.version}` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Technologies */}
             {result.technologies.length > 0 && (

@@ -28,6 +28,14 @@ interface CategoryScore {
   failed: number;
 }
 
+interface CMSInfo {
+  name: string | null;
+  version: string | null;
+  isOutdated: boolean | null;
+  theme: { name: string; version?: string } | null;
+  plugins: { name: string; version?: string }[];
+}
+
 interface AuditResult {
   url: string;
   timestamp: string;
@@ -39,6 +47,7 @@ interface AuditResult {
   responseTime: number;
   tlsInfo: { secure: boolean };
   technologies: string[];
+  cmsInfo: CMSInfo | null;
 }
 
 // Helper: safe fetch with timeout
@@ -1790,6 +1799,426 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
   return checks;
 }
 
+// Known latest CMS versions
+const KNOWN_LATEST_VERSIONS: Record<string, string> = {
+  WordPress: "6.7",
+  Joomla: "5.2",
+  Drupal: "11.1",
+  PrestaShop: "8.2",
+  Magento: "2.4",
+  TYPO3: "13.4",
+};
+
+function secVersionCompare(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+// Detect CMS info for the result
+function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo | null {
+  const lower = html.toLowerCase();
+
+  // WordPress
+  if (lower.includes("wp-content") || lower.includes("wp-includes")) {
+    const versionMeta = html.match(/content="WordPress\s+([\d.]+)"/i);
+    const versionGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["'][^"']*WordPress\s+([\d.]+)/i);
+    const version = versionMeta?.[1] || versionGen?.[1] || null;
+
+    const themeMatch = html.match(/wp-content\/themes\/([^/'"?]+)/i);
+    const themeVer = themeMatch
+      ? html.match(new RegExp(`wp-content/themes/${themeMatch[1]}[^'"]*[?&]ver(?:sion)?=([\\.\\d]+)`, "i"))
+      : null;
+    const theme = themeMatch ? { name: themeMatch[1], version: themeVer?.[1] } : null;
+
+    const pluginMatches = html.match(/wp-content\/plugins\/([^/'"?]+)/gi) || [];
+    const pluginNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of pluginMatches) {
+      const name = m.match(/plugins\/([^/'"?]+)/i)?.[1];
+      if (name && !pluginNames.has(name)) {
+        pluginNames.add(name);
+        const verMatch = html.match(new RegExp(`wp-content/plugins/${name}[^'"]*[?&]ver(?:sion)?=([\\.\\d]+)`, "i"));
+        plugins.push({ name, version: verMatch?.[1] });
+      }
+    }
+
+    const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.WordPress) < 0 : null;
+    return { name: "WordPress", version, isOutdated, theme, plugins };
+  }
+
+  // Joomla
+  if (lower.includes("joomla") || (lower.includes("/media/system/js/") && lower.includes("/templates/"))) {
+    const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Joomla!\s*([\d.]*)/i);
+    const version = gen?.[1] || null;
+    const templateMatch = html.match(/\/templates\/([^/'"?]+)/i);
+    const theme = templateMatch ? { name: templateMatch[1] } : null;
+    const modMatches = html.match(/\/(?:modules|plugins|components)\/(?:mod_|plg_|com_)([^/'"?]+)/gi) || [];
+    const modNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of modMatches) {
+      const name = m.match(/(?:mod_|plg_|com_)([^/'"?]+)/i)?.[1];
+      if (name && !modNames.has(name)) { modNames.add(name); plugins.push({ name }); }
+    }
+    const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.Joomla) < 0 : null;
+    return { name: "Joomla", version, isOutdated, theme, plugins };
+  }
+
+  // Drupal
+  if (lower.includes("drupal") || lower.includes("/sites/default/files/")) {
+    const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Drupal\s*([\d.]*)/i);
+    const version = gen?.[1] || null;
+    const themeMatch = html.match(/\/themes\/(?:custom\/|contrib\/)?([^/'"?]+)/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+    const modMatches = html.match(/\/modules\/(?:custom\/|contrib\/)?([^/'"?]+)/gi) || [];
+    const modNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of modMatches) {
+      const name = m.match(/\/([^/'"?]+)$/i)?.[1];
+      if (name && !modNames.has(name)) { modNames.add(name); plugins.push({ name }); }
+    }
+    const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.Drupal) < 0 : null;
+    return { name: "Drupal", version, isOutdated, theme, plugins };
+  }
+
+  // PrestaShop
+  if (lower.includes("prestashop")) {
+    const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']PrestaShop\s*([\d.]*)/i);
+    const version = gen?.[1] || null;
+    const themeMatch = html.match(/\/themes\/([^/'"?]+)/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+    const modMatches = html.match(/\/modules\/([^/'"?]+)/gi) || [];
+    const modNames = new Set<string>();
+    const plugins: { name: string; version?: string }[] = [];
+    for (const m of modMatches) {
+      const name = m.match(/\/modules\/([^/'"?]+)/i)?.[1];
+      if (name && !modNames.has(name)) { modNames.add(name); plugins.push({ name }); }
+    }
+    const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.PrestaShop) < 0 : null;
+    return { name: "PrestaShop", version, isOutdated, theme, plugins };
+  }
+
+  // Shopify
+  if (lower.includes("shopify") || lower.includes("cdn.shopify.com")) {
+    const themeMatch = html.match(/Shopify\.theme\s*=\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i);
+    const theme = themeMatch ? { name: themeMatch[1] } : null;
+    return { name: "Shopify", version: null, isOutdated: null, theme, plugins: [] };
+  }
+
+  // Wix / Squarespace / Webflow
+  if (lower.includes("wix.com")) return { name: "Wix", version: null, isOutdated: null, theme: null, plugins: [] };
+  if (lower.includes("squarespace")) return { name: "Squarespace", version: null, isOutdated: null, theme: null, plugins: [] };
+  if (lower.includes("webflow")) return { name: "Webflow", version: null, isOutdated: null, theme: null, plugins: [] };
+
+  // Magento
+  if (lower.includes("magento") || lower.includes("mage-") || lower.includes("/static/frontend/")) {
+    const v = html.match(/Magento\/([\d.]+)/i);
+    const version = v?.[1] || null;
+    const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.Magento) < 0 : null;
+    return { name: "Magento", version, isOutdated, theme: null, plugins: [] };
+  }
+
+  return null;
+}
+
+// =============================================================================
+// 11. JOOMLA-SPECIFIC SECURITY CHECKS
+// =============================================================================
+
+async function checkJoomla(baseUrl: string, html: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const lower = html.toLowerCase();
+
+  const isJoomla = lower.includes("joomla") || (lower.includes("/media/system/js/") && lower.includes("/templates/"));
+  if (!isJoomla) return checks;
+
+  checks.push({
+    id: "joomla-detected",
+    category: "cms",
+    name: "Joomla détecté",
+    status: "info",
+    description: "Ce site utilise Joomla. Des vérifications spécifiques vont être effectuées.",
+  });
+
+  // Version exposure
+  const joomlaGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Joomla!\s*([\d.]*)/i);
+  if (joomlaGen?.[1]) {
+    checks.push({
+      id: "joomla-version",
+      category: "cms",
+      name: "Version Joomla exposée",
+      status: "fail",
+      severity: "high",
+      description: `Joomla ${joomlaGen[1]} détecté via la balise generator. Les attaquants ciblent les versions connues.`,
+      value: `Joomla ${joomlaGen[1]}`,
+      recommendation: "Supprimez la balise generator dans les paramètres globaux de Joomla ou via un plugin de sécurité.",
+    });
+
+    if (secVersionCompare(joomlaGen[1], KNOWN_LATEST_VERSIONS.Joomla) < 0) {
+      checks.push({
+        id: "joomla-outdated",
+        category: "cms",
+        name: "Joomla obsolète",
+        status: "fail",
+        severity: "critical",
+        description: `Joomla ${joomlaGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.Joomla}. Les anciennes versions contiennent des vulnérabilités connues.`,
+        recommendation: "Mettez à jour Joomla vers la dernière version immédiatement.",
+      });
+    }
+  }
+
+  // Administrator page
+  const adminRes = await safeFetch(`${origin}/administrator/`, { method: "GET", redirect: "follow", timeout: 3000 });
+  if (adminRes?.ok) {
+    const adminBody = await adminRes.text().catch(() => "");
+    if (/joomla|com_login/i.test(adminBody)) {
+      checks.push({
+        id: "joomla-admin",
+        category: "cms",
+        name: "Page d'administration Joomla accessible",
+        status: "warn",
+        severity: "medium",
+        description: "La page /administrator/ est accessible. Cible privilégiée pour les attaques brute-force.",
+        value: `${origin}/administrator/`,
+        recommendation: "Protégez la page d'administration avec un plugin (AdminExile, jSecure) ou un .htaccess/IP whitelist.",
+      });
+    }
+  }
+
+  // configuration.php.bak
+  const configBackups = ["/configuration.php.bak", "/configuration.php.old", "/configuration.php~"];
+  for (const path of configBackups) {
+    const res = await safeFetch(`${origin}${path}`, { timeout: 3000 });
+    if (res?.ok) {
+      const body = await res.text().catch(() => "");
+      if (body.includes("JConfig") || body.includes("$host") || body.includes("$db")) {
+        checks.push({
+          id: "joomla-config-backup",
+          category: "cms",
+          name: "Backup configuration.php exposé",
+          status: "fail",
+          severity: "critical",
+          description: `Le fichier ${path} est accessible. Il contient les identifiants de la base de données.`,
+          value: `${origin}${path}`,
+          recommendation: "Supprimez ce fichier immédiatement et bloquez l'accès via .htaccess.",
+        });
+        break;
+      }
+    }
+  }
+
+  return checks;
+}
+
+// =============================================================================
+// 12. DRUPAL-SPECIFIC SECURITY CHECKS
+// =============================================================================
+
+async function checkDrupal(baseUrl: string, html: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const lower = html.toLowerCase();
+
+  const isDrupal = lower.includes("drupal") || lower.includes("/sites/default/files/");
+  if (!isDrupal) return checks;
+
+  checks.push({
+    id: "drupal-detected",
+    category: "cms",
+    name: "Drupal détecté",
+    status: "info",
+    description: "Ce site utilise Drupal. Des vérifications spécifiques vont être effectuées.",
+  });
+
+  // Version exposure
+  const drupalGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Drupal\s*([\d.]*)/i);
+  if (drupalGen?.[1]) {
+    checks.push({
+      id: "drupal-version",
+      category: "cms",
+      name: "Version Drupal exposée",
+      status: "fail",
+      severity: "high",
+      description: `Drupal ${drupalGen[1]} détecté via la balise generator.`,
+      value: `Drupal ${drupalGen[1]}`,
+      recommendation: "Supprimez la balise generator via le module de sécurité ou dans le template.",
+    });
+
+    if (secVersionCompare(drupalGen[1], KNOWN_LATEST_VERSIONS.Drupal) < 0) {
+      checks.push({
+        id: "drupal-outdated",
+        category: "cms",
+        name: "Drupal obsolète",
+        status: "fail",
+        severity: "critical",
+        description: `Drupal ${drupalGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.Drupal}.`,
+        recommendation: "Mettez à jour Drupal vers la dernière version. Les anciennes versions sont vulnérables (Drupalgeddon, etc.).",
+      });
+    }
+  }
+
+  // CHANGELOG.txt
+  const changelogRes = await safeFetch(`${origin}/CHANGELOG.txt`, { timeout: 3000 });
+  if (changelogRes?.ok) {
+    const body = await changelogRes.text().catch(() => "");
+    if (/drupal/i.test(body)) {
+      checks.push({
+        id: "drupal-changelog",
+        category: "cms",
+        name: "CHANGELOG.txt accessible",
+        status: "warn",
+        severity: "medium",
+        description: "Le fichier CHANGELOG.txt est accessible. Il révèle la version exacte de Drupal.",
+        value: `${origin}/CHANGELOG.txt`,
+        recommendation: "Supprimez ou bloquez l'accès au fichier CHANGELOG.txt.",
+      });
+    }
+  }
+
+  // user/login
+  const loginRes = await safeFetch(`${origin}/user/login`, { method: "GET", redirect: "follow", timeout: 3000 });
+  if (loginRes?.ok) {
+    const loginBody = await loginRes.text().catch(() => "");
+    if (/name="name"[\s\S]*name="pass"|drupal/i.test(loginBody)) {
+      checks.push({
+        id: "drupal-login",
+        category: "cms",
+        name: "Page de connexion Drupal accessible",
+        status: "warn",
+        severity: "medium",
+        description: "La page /user/login est accessible à l'URL par défaut.",
+        value: `${origin}/user/login`,
+        recommendation: "Renommez l'URL de connexion avec le module 'Rename Admin Paths' et limitez les tentatives de connexion.",
+      });
+    }
+  }
+
+  return checks;
+}
+
+// =============================================================================
+// 13. PRESTASHOP-SPECIFIC SECURITY CHECKS
+// =============================================================================
+
+async function checkPrestaShop(baseUrl: string, html: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const lower = html.toLowerCase();
+
+  if (!lower.includes("prestashop")) return checks;
+
+  checks.push({
+    id: "prestashop-detected",
+    category: "cms",
+    name: "PrestaShop détecté",
+    status: "info",
+    description: "Ce site utilise PrestaShop. Des vérifications spécifiques vont être effectuées.",
+  });
+
+  // Version exposure
+  const psGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']PrestaShop\s*([\d.]*)/i);
+  if (psGen?.[1]) {
+    checks.push({
+      id: "prestashop-version",
+      category: "cms",
+      name: "Version PrestaShop exposée",
+      status: "fail",
+      severity: "high",
+      description: `PrestaShop ${psGen[1]} détecté via la balise generator.`,
+      value: `PrestaShop ${psGen[1]}`,
+      recommendation: "Masquez la balise generator dans les paramètres PrestaShop ou via le template.",
+    });
+
+    if (secVersionCompare(psGen[1], KNOWN_LATEST_VERSIONS.PrestaShop) < 0) {
+      checks.push({
+        id: "prestashop-outdated",
+        category: "cms",
+        name: "PrestaShop obsolète",
+        status: "fail",
+        severity: "critical",
+        description: `PrestaShop ${psGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.PrestaShop}.`,
+        recommendation: "Mettez à jour PrestaShop vers la dernière version.",
+      });
+    }
+  }
+
+  // Admin panel (common default paths)
+  for (const adminPath of ["/admin", "/admin1", "/backoffice"]) {
+    const res = await safeFetch(`${origin}${adminPath}`, { method: "GET", redirect: "follow", timeout: 3000 });
+    if (res?.ok) {
+      const body = await res.text().catch(() => "");
+      if (/prestashop|admincontroller/i.test(body)) {
+        checks.push({
+          id: "prestashop-admin",
+          category: "cms",
+          name: "Back-office PrestaShop accessible",
+          status: "warn",
+          severity: "medium",
+          description: `Le back-office est accessible à ${adminPath}. Renommez le dossier d'administration.`,
+          value: `${origin}${adminPath}`,
+          recommendation: "Renommez le dossier d'administration avec un nom unique et non devinable.",
+        });
+        break;
+      }
+    }
+  }
+
+  return checks;
+}
+
+// =============================================================================
+// CMS VERSION CHECK (generic for all CMS)
+// =============================================================================
+
+function checkCMSVersion(cmsInfo: CMSInfo | null): AuditCheck[] {
+  const checks: AuditCheck[] = [];
+  if (!cmsInfo || !cmsInfo.name) return checks;
+
+  // Info check with CMS details
+  checks.push({
+    id: "cms-info",
+    category: "cms",
+    name: `CMS : ${cmsInfo.name}`,
+    status: "info",
+    description: [
+      cmsInfo.version ? `Version : ${cmsInfo.version}` : "Version non détectée",
+      cmsInfo.theme ? `Thème : ${cmsInfo.theme.name}${cmsInfo.theme.version ? ` v${cmsInfo.theme.version}` : ""}` : null,
+      cmsInfo.plugins.length > 0 ? `${cmsInfo.plugins.length} extension(s) : ${cmsInfo.plugins.map((p) => p.name).slice(0, 10).join(", ")}${cmsInfo.plugins.length > 10 ? "..." : ""}` : null,
+    ].filter(Boolean).join(" | "),
+    value: cmsInfo.version || "Version inconnue",
+  });
+
+  // Outdated check
+  if (cmsInfo.isOutdated === true) {
+    checks.push({
+      id: "cms-outdated",
+      category: "cms",
+      name: `${cmsInfo.name} n'est pas à jour`,
+      status: "fail",
+      severity: "critical",
+      description: `${cmsInfo.name} ${cmsInfo.version} est obsolète (dernière : ${KNOWN_LATEST_VERSIONS[cmsInfo.name] || "inconnue"}). Les anciennes versions contiennent des failles de sécurité exploitables.`,
+      recommendation: `Mettez à jour ${cmsInfo.name} vers la version ${KNOWN_LATEST_VERSIONS[cmsInfo.name] || "la plus récente"} immédiatement.`,
+    });
+  } else if (cmsInfo.isOutdated === false) {
+    checks.push({
+      id: "cms-uptodate",
+      category: "cms",
+      name: `${cmsInfo.name} est à jour`,
+      status: "pass",
+      description: `${cmsInfo.name} ${cmsInfo.version} est à jour.`,
+    });
+  }
+
+  return checks;
+}
+
 // =============================================================================
 // PERFORMANCE
 // =============================================================================
@@ -1974,14 +2403,20 @@ export async function POST(request: NextRequest) {
     const headers = response.headers;
 
     // Run all checks in parallel where possible
-    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks, wpChecks] = await Promise.all([
+    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks, wpChecks, joomlaChecks, drupalChecks, psChecks] = await Promise.all([
       checkSSL(targetUrl, isHttps),
       checkOWASP(targetUrl, html),
       checkInfrastructure(targetUrl, headers),
       checkIncidentResponse(targetUrl, headers, html),
       checkRGPD(html, targetUrl),
       checkWordPress(targetUrl, html),
+      checkJoomla(targetUrl, html),
+      checkDrupal(targetUrl, html),
+      checkPrestaShop(targetUrl, html),
     ]);
+
+    const cmsInfo = detectCMSInfo(html, headers, targetUrl);
+    const cmsVersionChecks = checkCMSVersion(cmsInfo);
 
     const allChecks: AuditCheck[] = [
       ...sslChecks,
@@ -1995,6 +2430,10 @@ export async function POST(request: NextRequest) {
       ...incidentChecks,
       ...checkPerformance(headers, html, responseTime),
       ...wpChecks,
+      ...joomlaChecks,
+      ...drupalChecks,
+      ...psChecks,
+      ...cmsVersionChecks,
     ];
 
     const technologies = detectTechnologies(headers, html);
@@ -2011,6 +2450,7 @@ export async function POST(request: NextRequest) {
       responseTime,
       tlsInfo: { secure: isHttps },
       technologies,
+      cmsInfo,
     };
 
     // Track audit request
