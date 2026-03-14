@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { insertAuditRequest } from "@/lib/db";
 
 // =============================================================================
 // SEO AUDIT API — Analyse SEO approfondie
@@ -1066,6 +1067,12 @@ export async function POST(request: NextRequest) {
       images: { total: imgTags.length, withAlt: imgsWithAlt, withoutAlt: imgTags.length - imgsWithAlt },
       technologies,
     };
+
+    // Track audit request
+    try {
+      const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+      insertAuditRequest({ siteUrl: result.url, auditType: "seo", score: result.score, grade: result.grade, ipAddress: ip });
+    } catch { /* non-blocking */ }
 
     return NextResponse.json(result);
   } catch (error) {

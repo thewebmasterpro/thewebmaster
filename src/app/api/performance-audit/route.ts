@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { insertAuditRequest } from "@/lib/db";
 
 // =============================================================================
 // PERFORMANCE AUDIT API — Analyse de performance web approfondie
@@ -1082,6 +1083,12 @@ export async function POST(request: NextRequest) {
       thirdPartyDomains,
       estimatedLoadTime,
     };
+
+    // Track audit request
+    try {
+      const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+      insertAuditRequest({ siteUrl: result.url, auditType: "performance", score: result.score, grade: result.grade, ipAddress: ip });
+    } catch { /* non-blocking */ }
 
     return NextResponse.json(result);
   } catch (error) {

@@ -99,6 +99,85 @@ export function getLeadsStats() {
   return { total, uniqueEmails, byType, pdfSent };
 }
 
+// --- Audit Requests (all requests, with or without email) ---
+
+interface AuditRequest {
+  id: number;
+  siteUrl: string;
+  auditType: "seo" | "performance" | "security";
+  score: number;
+  grade: string;
+  ipAddress: string;
+  createdAt: string;
+  email: string | null;
+}
+
+function getRequestsPath() {
+  return path.join(getDataDir(), "requests.json");
+}
+
+function readRequests(): AuditRequest[] {
+  try {
+    const p = getRequestsPath();
+    if (!fs.existsSync(p)) return [];
+    const raw = fs.readFileSync(p, "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function writeRequests(requests: AuditRequest[]): void {
+  ensureDataDir();
+  fs.writeFileSync(getRequestsPath(), JSON.stringify(requests, null, 2), "utf-8");
+}
+
+export function insertAuditRequest(input: {
+  siteUrl: string;
+  auditType: "seo" | "performance" | "security";
+  score: number;
+  grade: string;
+  ipAddress: string;
+}): number {
+  const requests = readRequests();
+  const id = requests.length > 0 ? Math.max(...requests.map((r) => r.id)) + 1 : 1;
+  requests.push({
+    id,
+    siteUrl: input.siteUrl,
+    auditType: input.auditType,
+    score: input.score,
+    grade: input.grade,
+    ipAddress: input.ipAddress,
+    createdAt: new Date().toISOString(),
+    email: null,
+  });
+  writeRequests(requests);
+  return id;
+}
+
+export function linkEmailToRequest(requestId: number, email: string): void {
+  const requests = readRequests();
+  const req = requests.find((r) => r.id === requestId);
+  if (req) {
+    req.email = email;
+    writeRequests(requests);
+  }
+}
+
+export function getAllRequests(): AuditRequest[] {
+  return readRequests().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export function getRequestsStats() {
+  const requests = readRequests();
+  const total = requests.length;
+  const withEmail = requests.filter((r) => r.email).length;
+  const withoutEmail = total - withEmail;
+  const byType = { seo: 0, performance: 0, security: 0 };
+  for (const r of requests) byType[r.auditType]++;
+  return { total, withEmail, withoutEmail, byType };
+}
+
 export function markPdfSent(id: number): void {
   const leads = readLeads();
   const lead = leads.find((l) => l.id === id);

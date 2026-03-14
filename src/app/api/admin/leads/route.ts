@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAllLeads, getLeadsStats } from "@/lib/db";
+import { getAllLeads, getLeadsStats, getAllRequests, getRequestsStats } from "@/lib/db";
 
 function verifyAdmin(request: NextRequest): boolean {
   const token = request.headers.get("x-admin-token");
@@ -13,8 +13,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const stats = getLeadsStats();
+  const leadsStats = getLeadsStats();
   const leads = getAllLeads();
+  const requestsStats = getRequestsStats();
+  const requests = getAllRequests();
 
-  return NextResponse.json({ stats, leads });
+  return NextResponse.json({ leadsStats, leads, requestsStats, requests });
 }

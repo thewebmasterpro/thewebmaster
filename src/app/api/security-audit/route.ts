@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { insertAuditRequest } from "@/lib/db";
 
 // =============================================================================
 // SECURITY AUDIT API — Full Expert Analysis
@@ -2011,6 +2012,12 @@ export async function POST(request: NextRequest) {
       tlsInfo: { secure: isHttps },
       technologies,
     };
+
+    // Track audit request
+    try {
+      const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
+      insertAuditRequest({ siteUrl: result.url, auditType: "security", score: result.score, grade: result.grade, ipAddress: ip });
+    } catch { /* non-blocking */ }
 
     return NextResponse.json(result);
   } catch (error) {

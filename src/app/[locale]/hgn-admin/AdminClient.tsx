@@ -12,6 +12,8 @@ import {
   Users,
   FileText,
   Download,
+  Activity,
+  MailCheck,
 } from "lucide-react";
 
 interface Lead {
@@ -27,11 +29,29 @@ interface Lead {
   pdfSent: boolean;
 }
 
-interface Stats {
+interface AuditRequest {
+  id: number;
+  siteUrl: string;
+  auditType: "seo" | "performance" | "security";
+  score: number;
+  grade: string;
+  ipAddress: string;
+  createdAt: string;
+  email: string | null;
+}
+
+interface LeadsStats {
   total: number;
   uniqueEmails: number;
   byType: { seo: number; performance: number; security: number };
   pdfSent: number;
+}
+
+interface RequestsStats {
+  total: number;
+  withEmail: number;
+  withoutEmail: number;
+  byType: { seo: number; performance: number; security: number };
 }
 
 const auditIcons = {
@@ -71,9 +91,12 @@ export default function AdminClient() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
+  const [requests, setRequests] = useState<AuditRequest[]>([]);
+  const [leadsStats, setLeadsStats] = useState<LeadsStats | null>(null);
+  const [requestsStats, setRequestsStats] = useState<RequestsStats | null>(null);
+  const [tab, setTab] = useState<"requests" | "leads">("requests");
   const [filterType, setFilterType] = useState<string>("all");
-  const [searchEmail, setSearchEmail] = useState("");
+  const [searchText, setSearchText] = useState("");
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -93,7 +116,9 @@ export default function AdminClient() {
 
       const data = await res.json();
       setLeads(data.leads);
-      setStats(data.stats);
+      setRequests(data.requests);
+      setLeadsStats(data.leadsStats);
+      setRequestsStats(data.requestsStats);
       setAuthenticated(true);
     } catch {
       setError("Erreur de connexion");
@@ -103,43 +128,42 @@ export default function AdminClient() {
   }
 
   function exportCsv() {
-    const headers = [
-      "ID",
-      "Email",
-      "Site",
-      "Type",
-      "Score",
-      "Grade",
-      "Locale",
-      "IP",
-      "Date",
-      "PDF Sent",
-    ];
-    const rows = filteredLeads.map((l) => [
-      l.id,
-      l.email,
-      l.siteUrl,
-      l.auditType,
-      l.score,
-      l.grade,
-      l.locale,
-      l.ipAddress,
-      l.createdAt,
-      l.pdfSent ? "Yes" : "No",
-    ]);
-    const csv = [headers, ...rows].map((r) => r.join(",")).join("\n");
+    if (tab === "requests") {
+      const headers = ["ID", "Site", "Type", "Score", "Grade", "Email", "IP", "Date"];
+      const rows = filteredRequests.map((r) => [
+        r.id, r.siteUrl, r.auditType, r.score, r.grade, r.email || "", r.ipAddress, r.createdAt,
+      ]);
+      downloadCsv([headers, ...rows], `requests-${new Date().toISOString().slice(0, 10)}.csv`);
+    } else {
+      const headers = ["ID", "Email", "Site", "Type", "Score", "Grade", "Locale", "IP", "Date", "PDF"];
+      const rows = filteredLeads.map((l) => [
+        l.id, l.email, l.siteUrl, l.auditType, l.score, l.grade, l.locale, l.ipAddress, l.createdAt, l.pdfSent ? "Yes" : "No",
+      ]);
+      downloadCsv([headers, ...rows], `leads-${new Date().toISOString().slice(0, 10)}.csv`);
+    }
+  }
+
+  function downloadCsv(data: (string | number | boolean)[][], filename: string) {
+    const csv = data.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
   }
 
+  const filteredRequests = requests.filter((r) => {
+    if (filterType !== "all" && r.auditType !== filterType) return false;
+    if (searchText && !r.siteUrl.toLowerCase().includes(searchText.toLowerCase()) && !(r.email || "").toLowerCase().includes(searchText.toLowerCase()))
+      return false;
+    return true;
+  });
+
   const filteredLeads = leads.filter((l) => {
     if (filterType !== "all" && l.auditType !== filterType) return false;
-    if (searchEmail && !l.email.toLowerCase().includes(searchEmail.toLowerCase()))
+    if (searchText && !l.email.toLowerCase().includes(searchText.toLowerCase()) && !l.siteUrl.toLowerCase().includes(searchText.toLowerCase()))
       return false;
     return true;
   });
@@ -181,7 +205,7 @@ export default function AdminClient() {
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Leads Audit</h1>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
           <button
             onClick={exportCsv}
             className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg px-4 py-2 text-sm transition-colors"
@@ -192,24 +216,55 @@ export default function AdminClient() {
         </div>
 
         {/* Stats */}
-        {stats && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            <StatCard icon={FileText} label="Total demandes" value={stats.total} />
-            <StatCard icon={Users} label="Emails uniques" value={stats.uniqueEmails} />
-            <StatCard icon={Search} label="SEO" value={stats.byType.seo} />
-            <StatCard icon={Gauge} label="Performance" value={stats.byType.performance} />
-            <StatCard icon={Shield} label="Securite" value={stats.byType.security} />
-            <StatCard icon={Mail} label="PDF envoyes" value={stats.pdfSent} />
+        {requestsStats && leadsStats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+            <StatCard icon={Activity} label="Total audits" value={requestsStats.total} />
+            <StatCard icon={MailCheck} label="Avec email" value={requestsStats.withEmail} />
+            <StatCard icon={Users} label="Sans email" value={requestsStats.withoutEmail} />
+            <StatCard icon={Search} label="SEO" value={requestsStats.byType.seo} />
+            <StatCard icon={Gauge} label="Performance" value={requestsStats.byType.performance} />
+            <StatCard icon={Shield} label="Securite" value={requestsStats.byType.security} />
+            <StatCard icon={Mail} label="Emails collectes" value={leadsStats.total} />
           </div>
         )}
+
+        {/* Tabs */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setTab("requests")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              tab === "requests"
+                ? "bg-white text-black border-white"
+                : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-600"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Activity className="w-4 h-4" />
+              Toutes les demandes ({requests.length})
+            </span>
+          </button>
+          <button
+            onClick={() => setTab("leads")}
+            className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+              tab === "leads"
+                ? "bg-white text-black border-white"
+                : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-600"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Mail className="w-4 h-4" />
+              Leads avec email ({leads.length})
+            </span>
+          </button>
+        </div>
 
         {/* Filters */}
         <div className="flex flex-col sm:flex-row gap-3">
           <input
             type="text"
-            value={searchEmail}
-            onChange={(e) => setSearchEmail(e.target.value)}
-            placeholder="Rechercher par email..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Rechercher par site ou email..."
             className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2 text-sm flex-1 focus:outline-none focus:border-zinc-600"
           />
           <div className="flex gap-2">
@@ -231,85 +286,133 @@ export default function AdminClient() {
 
         {/* Count */}
         <p className="text-zinc-500 text-sm">
-          {filteredLeads.length} resultat{filteredLeads.length !== 1 ? "s" : ""}
+          {(tab === "requests" ? filteredRequests.length : filteredLeads.length)} resultat
+          {(tab === "requests" ? filteredRequests.length : filteredLeads.length) !== 1 ? "s" : ""}
         </p>
 
-        {/* Table */}
+        {/* Tables */}
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-zinc-800 text-zinc-500 text-left">
-                <th className="py-3 px-3 font-medium">#</th>
-                <th className="py-3 px-3 font-medium">Type</th>
-                <th className="py-3 px-3 font-medium">Email</th>
-                <th className="py-3 px-3 font-medium">Site</th>
-                <th className="py-3 px-3 font-medium">Score</th>
-                <th className="py-3 px-3 font-medium">Grade</th>
-                <th className="py-3 px-3 font-medium">Locale</th>
-                <th className="py-3 px-3 font-medium">IP</th>
-                <th className="py-3 px-3 font-medium">Date</th>
-                <th className="py-3 px-3 font-medium">PDF</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredLeads.map((lead) => {
-                const Icon = auditIcons[lead.auditType];
-                return (
-                  <tr
-                    key={lead.id}
-                    className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors"
-                  >
-                    <td className="py-3 px-3 text-zinc-500">{lead.id}</td>
-                    <td className="py-3 px-3">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium border ${auditColors[lead.auditType]}`}
-                      >
-                        <Icon className="w-3 h-3" />
-                        {lead.auditType}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 text-zinc-200">{lead.email}</td>
-                    <td className="py-3 px-3">
-                      <span className="flex items-center gap-1.5 text-zinc-300">
-                        <Globe className="w-3 h-3 text-zinc-500" />
-                        {lead.siteUrl}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 font-mono">{lead.score}%</td>
-                    <td className={`py-3 px-3 font-bold ${gradeColor(lead.grade)}`}>
-                      {lead.grade}
-                    </td>
-                    <td className="py-3 px-3 text-zinc-500 uppercase text-xs">
-                      {lead.locale}
-                    </td>
-                    <td className="py-3 px-3 text-zinc-500 font-mono text-xs">
-                      {lead.ipAddress}
-                    </td>
-                    <td className="py-3 px-3 text-zinc-400">
-                      <span className="flex items-center gap-1.5">
-                        <Clock className="w-3 h-3 text-zinc-600" />
-                        {formatDate(lead.createdAt)}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3">
-                      {lead.pdfSent ? (
-                        <span className="text-emerald-400 text-xs">Oui</span>
-                      ) : (
-                        <span className="text-zinc-600 text-xs">Non</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredLeads.length === 0 && (
-                <tr>
-                  <td colSpan={10} className="py-12 text-center text-zinc-600">
-                    Aucune demande trouvee
-                  </td>
+          {tab === "requests" ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-800 text-zinc-500 text-left">
+                  <th className="py-3 px-3 font-medium">#</th>
+                  <th className="py-3 px-3 font-medium">Type</th>
+                  <th className="py-3 px-3 font-medium">Site</th>
+                  <th className="py-3 px-3 font-medium">Score</th>
+                  <th className="py-3 px-3 font-medium">Grade</th>
+                  <th className="py-3 px-3 font-medium">Email</th>
+                  <th className="py-3 px-3 font-medium">IP</th>
+                  <th className="py-3 px-3 font-medium">Date</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filteredRequests.map((req) => {
+                  const Icon = auditIcons[req.auditType];
+                  return (
+                    <tr key={req.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
+                      <td className="py-3 px-3 text-zinc-500">{req.id}</td>
+                      <td className="py-3 px-3">
+                        <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium border ${auditColors[req.auditType]}`}>
+                          <Icon className="w-3 h-3" />
+                          {req.auditType}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        <span className="flex items-center gap-1.5 text-zinc-300">
+                          <Globe className="w-3 h-3 text-zinc-500" />
+                          {req.siteUrl}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 font-mono">{req.score}%</td>
+                      <td className={`py-3 px-3 font-bold ${gradeColor(req.grade)}`}>{req.grade}</td>
+                      <td className="py-3 px-3">
+                        {req.email ? (
+                          <span className="text-zinc-200">{req.email}</span>
+                        ) : (
+                          <span className="text-zinc-600 text-xs">--</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-zinc-500 font-mono text-xs">{req.ipAddress}</td>
+                      <td className="py-3 px-3 text-zinc-400">
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="w-3 h-3 text-zinc-600" />
+                          {formatDate(req.createdAt)}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredRequests.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-12 text-center text-zinc-600">Aucune demande</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-800 text-zinc-500 text-left">
+                  <th className="py-3 px-3 font-medium">#</th>
+                  <th className="py-3 px-3 font-medium">Type</th>
+                  <th className="py-3 px-3 font-medium">Email</th>
+                  <th className="py-3 px-3 font-medium">Site</th>
+                  <th className="py-3 px-3 font-medium">Score</th>
+                  <th className="py-3 px-3 font-medium">Grade</th>
+                  <th className="py-3 px-3 font-medium">Locale</th>
+                  <th className="py-3 px-3 font-medium">IP</th>
+                  <th className="py-3 px-3 font-medium">Date</th>
+                  <th className="py-3 px-3 font-medium">PDF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLeads.map((lead) => {
+                  const Icon = auditIcons[lead.auditType];
+                  return (
+                    <tr key={lead.id} className="border-b border-zinc-800/50 hover:bg-zinc-900/50 transition-colors">
+                      <td className="py-3 px-3 text-zinc-500">{lead.id}</td>
+                      <td className="py-3 px-3">
+                        <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium border ${auditColors[lead.auditType]}`}>
+                          <Icon className="w-3 h-3" />
+                          {lead.auditType}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-zinc-200">{lead.email}</td>
+                      <td className="py-3 px-3">
+                        <span className="flex items-center gap-1.5 text-zinc-300">
+                          <Globe className="w-3 h-3 text-zinc-500" />
+                          {lead.siteUrl}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 font-mono">{lead.score}%</td>
+                      <td className={`py-3 px-3 font-bold ${gradeColor(lead.grade)}`}>{lead.grade}</td>
+                      <td className="py-3 px-3 text-zinc-500 uppercase text-xs">{lead.locale}</td>
+                      <td className="py-3 px-3 text-zinc-500 font-mono text-xs">{lead.ipAddress}</td>
+                      <td className="py-3 px-3 text-zinc-400">
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="w-3 h-3 text-zinc-600" />
+                          {formatDate(lead.createdAt)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3">
+                        {lead.pdfSent ? (
+                          <span className="text-emerald-400 text-xs">Oui</span>
+                        ) : (
+                          <span className="text-zinc-600 text-xs">Non</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredLeads.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="py-12 text-center text-zinc-600">Aucun lead</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
