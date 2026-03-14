@@ -174,7 +174,7 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
   }
 
   // ── Joomla ──
-  if (lower.includes("joomla") || lower.includes("/media/system/js/") || lower.includes("/templates/") && lower.includes("/media/")) {
+  if (lower.includes("joomla") || lower.includes("/media/system/js/") || (lower.includes("/templates/") && lower.includes("/media/"))) {
     const joomlaGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Joomla!\s*([\d.]*)/i);
     const version = joomlaGen?.[1] || null;
 
@@ -220,7 +220,7 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
   }
 
   // ── PrestaShop ──
-  if (lower.includes("prestashop") || lower.includes("/themes/") && lower.includes("/modules/") && lower.includes("prestashop")) {
+  if (lower.includes("prestashop") || (lower.includes("/themes/") && lower.includes("/modules/") && lower.includes("prestashop"))) {
     const psGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']PrestaShop\s*([\d.]*)/i);
     const version = psGen?.[1] || null;
 
@@ -504,15 +504,15 @@ function checkServerNetwork(
 ): PerfCheck[] {
   const checks: PerfCheck[] = [];
 
-  // TTFB
-  const ttfbStatus = responseTime < 600 ? "pass" : responseTime < 1500 ? "warn" : "fail";
+  // TTFB — thresholds aligned with Google's Web Vitals (800ms good, 1800ms poor)
+  const ttfbStatus = responseTime < 800 ? "pass" : responseTime < 1800 ? "warn" : "fail";
   checks.push({
     id: "server-ttfb",
     category: "server",
     name: "Time to First Byte (TTFB)",
     status: ttfbStatus,
-    severity: ttfbStatus === "fail" ? "critical" : ttfbStatus === "warn" ? "high" : "info",
-    description: `TTFB : ${responseTime}ms${responseTime < 600 ? " — Excellent" : responseTime < 1500 ? " — A ameliorer" : " — Trop lent"}`,
+    severity: ttfbStatus === "fail" ? "high" : ttfbStatus === "warn" ? "medium" : "info",
+    description: `TTFB : ${responseTime}ms${responseTime < 800 ? " — Bon" : responseTime < 1800 ? " — A ameliorer" : " — Trop lent"}`,
     value: `${responseTime}ms`,
     recommendation: ttfbStatus !== "pass"
       ? "Optimisez le TTFB : activez le cache serveur, utilisez un CDN, optimisez les requetes base de donnees, upgrader le hosting."
@@ -574,20 +574,26 @@ function checkServerNetwork(
   });
 
   // Cache-Control
+  // SSR/dynamic HTML pages correctly use no-cache/no-store — this is expected behavior
   const cacheControl = headers.get("cache-control");
   const hasEffectiveCache = cacheControl && /max-age=\d{3,}|s-maxage|immutable/i.test(cacheControl);
   const hasNoCache = cacheControl && /no-cache|no-store/i.test(cacheControl);
+  const isSSR = isModernFramework(html);
+  const cacheStatus = hasEffectiveCache ? "pass" : isSSR && hasNoCache ? "pass" : hasNoCache ? "info" : cacheControl ? "warn" : "warn";
+  const cacheSeverity = hasEffectiveCache ? "info" : isSSR && hasNoCache ? "info" : hasNoCache ? "info" : cacheControl ? "low" : "low";
   checks.push({
     id: "server-cache",
     category: "server",
     name: "Politique de cache (Cache-Control)",
-    status: hasEffectiveCache ? "pass" : hasNoCache ? "warn" : cacheControl ? "warn" : "fail",
-    severity: !cacheControl ? "high" : hasNoCache ? "medium" : hasEffectiveCache ? "info" : "medium",
-    description: cacheControl
-      ? `Cache-Control: ${cacheControl}`
-      : "Aucun en-tete Cache-Control detecte",
+    status: cacheStatus,
+    severity: cacheSeverity,
+    description: isSSR && hasNoCache
+      ? `Cache-Control: ${cacheControl} — correct pour les pages dynamiques (SSR)`
+      : cacheControl
+        ? `Cache-Control: ${cacheControl}`
+        : "Aucun en-tete Cache-Control detecte — configurez le cache pour les assets statiques",
     value: cacheControl || "Absent",
-    recommendation: !hasEffectiveCache
+    recommendation: !hasEffectiveCache && !isSSR
       ? "Configurez des en-tetes Cache-Control avec max-age pour les ressources statiques (ex: max-age=31536000 pour les assets immuables)."
       : undefined,
   });
@@ -615,8 +621,8 @@ function checkServerNetwork(
     id: "server-info-leak",
     category: "server",
     name: "Fuite d'information serveur",
-    status: leaksInfo ? "warn" : "pass",
-    severity: leaksInfo ? "low" : "info",
+    status: leaksInfo ? "info" : "pass",
+    severity: "info",
     description: leaksInfo
       ? `Informations serveur exposees : ${[server, xPoweredBy].filter(Boolean).join(", ")}`
       : "Aucune information serveur exposee",
@@ -673,9 +679,11 @@ function checkResources(html: string, resources: ResourceStats): PerfCheck[] {
       : undefined,
   });
 
-  // Stylesheets
+  // Stylesheets — frameworks handle CSS loading optimally (code-split, async)
   const totalCss = resources.totalStylesheets + resources.inlineStyles;
-  const cssStatus = totalCss <= 5 ? "pass" : totalCss <= 10 ? "warn" : "fail";
+  const cssPassThreshold = isFrameworkSite ? 10 : 5;
+  const cssWarnThreshold = isFrameworkSite ? 15 : 10;
+  const cssStatus = totalCss <= cssPassThreshold ? "pass" : totalCss <= cssWarnThreshold ? "warn" : "fail";
   checks.push({
     id: "res-css-count",
     category: "resources",
@@ -693,7 +701,10 @@ function checkResources(html: string, resources: ResourceStats): PerfCheck[] {
   const inlineStyles = (html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || []);
   const inlineCssSize = inlineStyles.reduce((acc, s) => acc + s.length, 0);
   const inlineCssKB = Math.round(inlineCssSize / 1024);
-  const inlineCssStatus = inlineCssKB < 15 ? "pass" : inlineCssKB < 50 ? "warn" : "fail";
+  // Modern frameworks inline CSS for critical rendering — higher thresholds are normal
+  const inlineCssPassThreshold = isFrameworkSite ? 50 : 15;
+  const inlineCssWarnThreshold = isFrameworkSite ? 100 : 50;
+  const inlineCssStatus = inlineCssKB < inlineCssPassThreshold ? "pass" : inlineCssKB < inlineCssWarnThreshold ? "warn" : "fail";
   checks.push({
     id: "res-inline-css",
     category: "resources",
@@ -882,18 +893,23 @@ function checkFonts(html: string): PerfCheck[] {
   const fontFaces = html.match(/@font-face/gi) || [];
   const hasFonts = hasGoogleFonts || fontFaces.length > 0;
 
+  // Next.js self-hosts fonts via next/font with automatic preloading and optimization
+  const hasNextFont = isModernFramework(html) && /\/_next\/static\/media\/[^"']*\.(woff2?|ttf|otf)/i.test(html);
   if (hasFonts) {
+    const fontPreloadOk = preloadedFonts.length > 0 || hasNextFont;
     checks.push({
       id: "font-preload",
       category: "fonts",
       name: "Preload des polices",
-      status: preloadedFonts.length > 0 ? "pass" : "warn",
-      severity: preloadedFonts.length > 0 ? "info" : "medium",
-      description: preloadedFonts.length > 0
-        ? `${preloadedFonts.length} police(s) preloadee(s)`
-        : "Aucune police preloadee",
-      value: `${preloadedFonts.length} preloadee(s)`,
-      recommendation: preloadedFonts.length === 0
+      status: fontPreloadOk ? "pass" : "warn",
+      severity: fontPreloadOk ? "info" : "low",
+      description: hasNextFont
+        ? "Polices self-hosted et optimisees par le framework (next/font)"
+        : preloadedFonts.length > 0
+          ? `${preloadedFonts.length} police(s) preloadee(s)`
+          : "Aucune police preloadee",
+      value: hasNextFont ? "next/font" : `${preloadedFonts.length} preloadee(s)`,
+      recommendation: !fontPreloadOk
         ? "Preloadez vos polices critiques avec <link rel='preload' as='font' crossorigin> pour accelerer le First Contentful Paint."
         : undefined,
     });
@@ -1058,19 +1074,22 @@ function checkOptimization(html: string, thirdPartyDomains: string[]): PerfCheck
       : undefined,
   });
 
-  // Preload
-  const preloads = (html.match(/<link[^>]*rel=["']preload["'][^>]*>/gi) || []);
+  // Preload — Next.js automatically preloads critical JS/CSS chunks via modulepreload
+  const preloads = (html.match(/<link[^>]*rel=["'](preload|modulepreload)["'][^>]*>/gi) || []);
+  const hasFrameworkPreloads = isModernFramework(html) && /<link[^>]*rel=["']modulepreload["']/i.test(html);
   checks.push({
     id: "opt-preload",
     category: "optimization",
     name: "Preload de ressources critiques",
-    status: preloads.length > 0 ? "pass" : "warn",
-    severity: preloads.length > 0 ? "info" : "medium",
-    description: preloads.length > 0
-      ? `${preloads.length} ressource(s) preloadee(s)`
-      : "Aucune ressource preloadee",
+    status: preloads.length > 0 || hasFrameworkPreloads ? "pass" : "warn",
+    severity: preloads.length > 0 || hasFrameworkPreloads ? "info" : "low",
+    description: hasFrameworkPreloads
+      ? `${preloads.length} ressource(s) preloadee(s) (modulepreload par le framework)`
+      : preloads.length > 0
+        ? `${preloads.length} ressource(s) preloadee(s)`
+        : "Aucune ressource preloadee",
     value: `${preloads.length}`,
-    recommendation: preloads.length === 0
+    recommendation: preloads.length === 0 && !hasFrameworkPreloads
       ? "Preloadez les ressources critiques (fonts, hero image, CSS critique) avec <link rel='preload'>."
       : undefined,
   });
@@ -1155,8 +1174,11 @@ function checkCoreWebVitals(
   const checks: PerfCheck[] = [];
 
   // Estimated FCP (based on TTFB + blocking resources + page size)
-  const blockingPenalty = resources.syncScripts * 200 + resources.totalStylesheets * 100;
-  const sizePenalty = Math.max(0, (pageSize / 1024 - 100) * 5);
+  // Modern frameworks inject CSS optimally (critical CSS inline, async loading) — lower penalty
+  const isFrameworkSite = isModernFramework(html);
+  const cssPenalty = isFrameworkSite ? resources.totalStylesheets * 30 : resources.totalStylesheets * 100;
+  const blockingPenalty = resources.syncScripts * 200 + cssPenalty;
+  const sizePenalty = Math.max(0, (pageSize / 1024 - 100) * 3);
   const estimatedFCP = responseTime + blockingPenalty + sizePenalty;
   const fcpStatus = estimatedFCP < 1800 ? "pass" : estimatedFCP < 3000 ? "warn" : "fail";
   checks.push({
@@ -1173,8 +1195,11 @@ function checkCoreWebVitals(
   });
 
   // LCP estimation (FCP + image loading penalty)
-  const imgPenalty = resources.totalImages > 0 && resources.lazyImages < resources.totalImages ? 500 : 0;
-  const estimatedLCP = estimatedFCP + imgPenalty + (resources.totalFonts > 0 ? 200 : 0);
+  // Next.js Image component handles lazy loading and priority loading automatically
+  const imgPenalty = resources.totalImages > 0 && resources.lazyImages < resources.totalImages ? (isFrameworkSite ? 200 : 500) : 0;
+  // Framework self-hosted fonts (next/font) don't add significant LCP delay
+  const fontLcpPenalty = resources.totalFonts > 0 ? (isFrameworkSite ? 50 : 200) : 0;
+  const estimatedLCP = estimatedFCP + imgPenalty + fontLcpPenalty;
   const lcpStatus = estimatedLCP < 2500 ? "pass" : estimatedLCP < 4000 ? "warn" : "fail";
   checks.push({
     id: "cwv-lcp",
