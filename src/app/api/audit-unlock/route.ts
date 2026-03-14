@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Resend } from "resend";
 import { rateLimit, rateLimitResponse } from "@/lib/rate-limit";
 import { verifyCsrf } from "@/lib/csrf";
 import { insertAuditLead } from "@/lib/db";
@@ -15,6 +14,7 @@ interface UnlockPayload {
   score: number;
   grade: string;
   locale: string;
+  reportText: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       hostname = body.siteUrl;
     }
 
-    // Save lead to SQLite
+    // Save lead
     const leadId = insertAuditLead({
       email: body.email,
       siteUrl: body.siteUrl,
@@ -88,12 +88,10 @@ export async function POST(request: NextRequest) {
       ipAddress: ip,
     });
 
-    // Send email with audit summary (non-blocking — unlock works even if email fails)
+    // Send email with full report (non-blocking — unlock works even if email fails)
     let emailSent = false;
     if (process.env.RESEND_API_KEY) {
       try {
-        const resend = new Resend(process.env.RESEND_API_KEY);
-
         const subject = getAuditEmailSubject({
           hostname,
           auditType: body.auditType,
@@ -108,15 +106,23 @@ export async function POST(request: NextRequest) {
           score,
           grade,
           locale,
+          reportText: body.reportText || "",
         });
 
-        await resend.emails.send({
-          from: "The Webmaster <noreply@thewebmaster.pro>",
-          to: [body.email],
-          subject,
-          html,
+        const emailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          },
+          body: JSON.stringify({
+            from: "The Webmaster <noreply@thewebmaster.pro>",
+            to: [body.email],
+            subject,
+            html,
+          }),
         });
-        emailSent = true;
+        emailSent = emailRes.ok;
       } catch (emailError) {
         console.error("[AuditUnlock] Email send failed:", emailError);
       }

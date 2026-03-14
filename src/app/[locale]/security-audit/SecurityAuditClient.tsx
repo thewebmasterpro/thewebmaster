@@ -1089,6 +1089,7 @@ export default function SecurityAuditClient({ locale = "fr" }: { locale?: string
                 score={result.score}
                 grade={result.grade}
                 locale={locale}
+                reportText={generateReportText(result, t, dateLocale)}
                 onUnlocked={() => setUnlocked(true)}
               />
             ) : (

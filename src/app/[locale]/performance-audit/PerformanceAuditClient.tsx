@@ -739,11 +739,9 @@ function generatePDF(result: PerfAuditResult, t: PerfTranslations, dateLocale: s
   doc.save(`perf-audit-${hostname}-${new Date().toISOString().split("T")[0]}.pdf`);
 }
 
-function PerfReport({ result, t, dateLocale }: { result: PerfAuditResult; t: PerfTranslations; dateLocale: string }) {
-  const [copied, setCopied] = useState(false);
+function buildPerfReportText(result: PerfAuditResult, t: PerfTranslations, dateLocale: string): string {
   const { quickWins, warnings, improvements } = generateReportText(result);
-
-  const reportText = `${t.reportTitle}
+  return `${t.reportTitle}
 ${"=".repeat(50)}
 ${t.reportSite} : ${result.url}
 Date : ${new Date(result.timestamp).toLocaleString(dateLocale)}
@@ -786,6 +784,12 @@ ${result.thirdPartyDomains.join(", ") || t.reportNoThirdParty}
 ---
 ${t.reportGeneratedBy}
 `;
+}
+
+function PerfReport({ result, t, dateLocale }: { result: PerfAuditResult; t: PerfTranslations; dateLocale: string }) {
+  const [copied, setCopied] = useState(false);
+  const { quickWins, warnings, improvements } = generateReportText(result);
+  const reportText = buildPerfReportText(result, t, dateLocale);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(reportText);
@@ -1063,6 +1067,7 @@ export default function PerformanceAuditClient({ locale = "fr" }: { locale?: str
                 score={result.score}
                 grade={result.grade}
                 locale={locale}
+                reportText={buildPerfReportText(result, t, dateLocale)}
                 onUnlocked={() => setUnlocked(true)}
               />
             ) : (

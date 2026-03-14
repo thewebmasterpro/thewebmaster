@@ -21,6 +21,7 @@ interface UnlockGateProps {
   score: number;
   grade: string;
   locale: string;
+  reportText: string;
   onUnlocked: () => void;
 }
 
@@ -31,6 +32,7 @@ export default function UnlockGate({
   score,
   grade,
   locale,
+  reportText,
   onUnlocked,
 }: UnlockGateProps) {
   const [email, setEmail] = useState("");
@@ -56,6 +58,7 @@ export default function UnlockGate({
           score,
           grade,
           locale,
+          reportText,
         }),
       });
 

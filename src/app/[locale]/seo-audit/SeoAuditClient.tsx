@@ -692,11 +692,9 @@ function generatePDF(result: SeoAuditResult, t: SeoTranslations, dateLocale: str
   doc.save(`seo-audit-${hostname}-${new Date().toISOString().split("T")[0]}.pdf`);
 }
 
-function SeoReport({ result, t, dateLocale }: { result: SeoAuditResult; t: SeoTranslations; dateLocale: string }) {
-  const [copied, setCopied] = useState(false);
+function buildSeoReportText(result: SeoAuditResult, t: SeoTranslations, dateLocale: string): string {
   const { quickWins, warnings, improvements } = generateSeoReportText(result);
-
-  const reportText = `${t.reportTitle}
+  return `${t.reportTitle}
 ${"=".repeat(50)}
 ${t.reportSite} : ${result.url}
 Date : ${new Date(result.timestamp).toLocaleString(dateLocale)}
@@ -732,8 +730,14 @@ ${"-".repeat(30)}
 ${result.technologies.join(", ") || t.reportNone}
 
 ---
-Genere par TheWebmaster {t.toolName}
+${t.reportGeneratedBy}
 `;
+}
+
+function SeoReport({ result, t, dateLocale }: { result: SeoAuditResult; t: SeoTranslations; dateLocale: string }) {
+  const [copied, setCopied] = useState(false);
+  const { quickWins, warnings, improvements } = generateSeoReportText(result);
+  const reportText = buildSeoReportText(result, t, dateLocale);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(reportText);
@@ -1017,6 +1021,7 @@ export default function SeoAuditClient({ locale = "fr" }: { locale?: string }) {
                 score={result.score}
                 grade={result.grade}
                 locale={locale}
+                reportText={buildSeoReportText(result, t, dateLocale)}
                 onUnlocked={() => setUnlocked(true)}
               />
             ) : (
