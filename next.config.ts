@@ -72,13 +72,43 @@ const nextConfig: NextConfig = {
   // Remove X-Powered-By header
   poweredByHeader: false,
 
-  // Security headers
+  // Security + caching headers
   async headers() {
     return [
       {
-        // Apply to all routes
+        // Apply security headers to all routes
         source: "/:path*",
         headers: securityHeaders,
+      },
+      {
+        // Long-term cache for static assets (Next.js hashed filenames)
+        source: "/_next/static/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
+        // Cache images
+        source: "/_next/image/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, stale-while-revalidate=604800",
+          },
+        ],
+      },
+      {
+        // Cache static files (favicon, etc.)
+        source: "/favicon.ico",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400",
+          },
+        ],
       },
     ];
   },

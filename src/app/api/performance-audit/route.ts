@@ -440,13 +440,15 @@ function extractResourceStats(html: string): ResourceStats {
   const scriptSrcs = scriptTags.filter((s) => /src=["']/i.test(s));
   const allInlineScripts = scriptTags.filter((s) => !/src=["']/i.test(s) && !/type=["']application\/(ld\+json|json)["']/i.test(s));
   // Exclude framework hydration/data scripts from inline count
+  // Next.js uses various inline patterns: RSC payloads, flight data, chunk loading, router state
   const frameworkDataCount = countFrameworkDataScripts(html);
   const inlineScripts = allInlineScripts.filter((s) =>
-    !/self\.__next_f|__NEXT_DATA__|self\.__next_[a-z]/i.test(s)
+    !/self\.__next_f|__NEXT_DATA__|self\.__next_[a-z]|__next_chunk__|_N_E/i.test(s)
   );
-  const syncScripts = scriptSrcs.filter((s) => !/async|defer/i.test(s));
+  // type="module" scripts are inherently deferred by the browser — don't count as sync
+  const syncScripts = scriptSrcs.filter((s) => !/async|defer|type=["']module["']/i.test(s));
   const asyncScripts = scriptSrcs.filter((s) => /async/i.test(s));
-  const deferScripts = scriptSrcs.filter((s) => /defer/i.test(s));
+  const deferScripts = scriptSrcs.filter((s) => /defer|type=["']module["']/i.test(s));
 
   const stylesheets = (html.match(/<link[^>]*rel=["']stylesheet["'][^>]*>/gi) || []);
   const inlineStyles = (html.match(/<style[^>]*>[\s\S]*?<\/style>/gi) || []);
@@ -652,8 +654,12 @@ function checkResources(html: string, resources: ResourceStats): PerfCheck[] {
   });
 
   // Total scripts count (excludes framework hydration/data scripts)
+  // Modern frameworks use code splitting → more script tags is expected and optimal
   const totalScripts = resources.totalScripts + resources.inlineScripts;
-  const scriptsStatus = totalScripts <= 15 ? "pass" : totalScripts <= 25 ? "warn" : "fail";
+  const isFrameworkSite = isModernFramework(html);
+  const scriptsThresholdPass = isFrameworkSite ? 25 : 15;
+  const scriptsThresholdWarn = isFrameworkSite ? 40 : 25;
+  const scriptsStatus = totalScripts <= scriptsThresholdPass ? "pass" : totalScripts <= scriptsThresholdWarn ? "warn" : "fail";
   checks.push({
     id: "res-scripts-count",
     category: "resources",
@@ -701,8 +707,9 @@ function checkResources(html: string, resources: ResourceStats): PerfCheck[] {
       : undefined,
   });
 
-  // Inline JS size
-  const inlineJsBlocks = (html.match(/<script(?![^>]*src=)(?![^>]*type=["']application\/(ld\+json|json)["'])[^>]*>([\s\S]*?)<\/script>/gi) || []);
+  // Inline JS size — exclude framework data scripts (RSC payloads, hydration data)
+  const inlineJsBlocks = (html.match(/<script(?![^>]*src=)(?![^>]*type=["']application\/(ld\+json|json)["'])[^>]*>([\s\S]*?)<\/script>/gi) || [])
+    .filter((s) => !/self\.__next_f|__NEXT_DATA__|self\.__next_[a-z]|__next_chunk__|_N_E/i.test(s));
   const inlineJsSize = inlineJsBlocks.reduce((acc, s) => acc + s.length, 0);
   const inlineJsKB = Math.round(inlineJsSize / 1024);
   const inlineJsStatus = inlineJsKB < 10 ? "pass" : inlineJsKB < 30 ? "warn" : "fail";
@@ -1206,9 +1213,10 @@ function checkCoreWebVitals(
   });
 
   // TBT estimation (based on sync scripts + inline JS)
-  // Framework data scripts (RSC payloads, hydration data) are tiny and non-blocking
+  // Modern frameworks (Next.js, Nuxt) use small inline scripts for hydration/routing — much lower blocking cost
+  const isFramework = isModernFramework(html);
   const syncScriptPenalty = resources.syncScripts * 300;
-  const inlineJsPenalty = resources.inlineScripts * 50;
+  const inlineJsPenalty = resources.inlineScripts * (isFramework ? 15 : 50);
   const estimatedTBT = syncScriptPenalty + inlineJsPenalty;
   const tbtStatus = estimatedTBT < 300 ? "pass" : estimatedTBT < 800 ? "warn" : "fail";
   checks.push({

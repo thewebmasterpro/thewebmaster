@@ -18,9 +18,6 @@ export default async function RootLayout({
       <head>
         <link rel="preconnect" href="https://analytics.hagendigital.com" />
         <link rel="dns-prefetch" href="https://www.google.com" />
-        <link rel="dns-prefetch" href="https://www.facebook.com" />
-        <link rel="dns-prefetch" href="https://www.instagram.com" />
-        <link rel="dns-prefetch" href="https://www.linkedin.com" />
         <JsonLd data={[organizationJsonLd(), websiteJsonLd()]} />
       </head>
       <body className={`${fontVariables} antialiased`}>
