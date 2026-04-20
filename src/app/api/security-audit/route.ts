@@ -1,54 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { insertAuditRequest } from "@/lib/db";
+import tls from "node:tls";
+import { insertAuditRequest, insertAuditReport, getPreviousAudit } from "@/lib/db";
+import type {
+  AuditCheck,
+  CategoryScore,
+  CMSInfo,
+  AuditResult,
+  Regression,
+} from "@/types/audit";
+import { detectStack, buildThreatModel } from "@/lib/audit/stack";
+import { enrichWithCompliance } from "@/lib/audit/compliance";
+import { enhanceWithStackRemediations } from "@/lib/audit/remediations";
+import { buildActionPlan } from "@/lib/audit/action-plan";
+import { discoverRoutes, crawlAndAuditHeaders } from "@/lib/audit/crawl";
+import { preloadLatestVersions } from "@/lib/audit/live-versions";
+import { checkCAA } from "@/lib/audit/dns-caa";
+import { checkHttpProtocols } from "@/lib/audit/http2-http3";
+import { analyzeCSP } from "@/lib/audit/csp-analyzer";
+import { checkSubdomainTakeover } from "@/lib/audit/subdomain-takeover";
 
 // =============================================================================
 // SECURITY AUDIT API — Full Expert Analysis
 // OWASP, Infrastructure, RGPD Compliance, Incident Response
 // =============================================================================
-
-interface AuditCheck {
-  id: string;
-  category: string;
-  name: string;
-  status: "pass" | "warn" | "fail" | "info";
-  severity?: "critical" | "high" | "medium" | "low" | "info";
-  description: string;
-  value?: string;
-  recommendation?: string;
-}
-
-interface CategoryScore {
-  category: string;
-  label: string;
-  score: number;
-  grade: string;
-  total: number;
-  passed: number;
-  warned: number;
-  failed: number;
-}
-
-interface CMSInfo {
-  name: string | null;
-  version: string | null;
-  isOutdated: boolean | null;
-  theme: { name: string; version?: string } | null;
-  plugins: { name: string; version?: string }[];
-}
-
-interface AuditResult {
-  url: string;
-  timestamp: string;
-  score: number;
-  grade: string;
-  status: "production-ready" | "needs-fixes" | "at-risk" | "critical";
-  checks: AuditCheck[];
-  categoryScores: CategoryScore[];
-  responseTime: number;
-  tlsInfo: { secure: boolean };
-  technologies: string[];
-  cmsInfo: CMSInfo | null;
-}
 
 // Helper: safe fetch with timeout
 async function safeFetch(
@@ -64,6 +38,122 @@ async function safeFetch(
   } catch {
     return null;
   }
+}
+
+// =============================================================================
+// INFRASTRUCTURE CONTEXT — detect CDN / hosting so checks can be contextualised
+// =============================================================================
+
+interface InfraContext {
+  cdn: string | null;
+  isManagedHost: boolean;
+}
+
+function detectInfra(headers: Headers): InfraContext {
+  const server = (headers.get("server") || "").toLowerCase();
+  const via = (headers.get("via") || "").toLowerCase();
+  const xServedBy = (headers.get("x-served-by") || "").toLowerCase();
+
+  let cdn: string | null = null;
+  if (headers.get("cf-ray") || headers.get("cf-cache-status") || server.includes("cloudflare")) {
+    cdn = "Cloudflare";
+  } else if (headers.get("x-vercel-id") || headers.get("x-vercel-cache") || server.includes("vercel")) {
+    cdn = "Vercel";
+  } else if (headers.get("x-nf-request-id") || server.includes("netlify")) {
+    cdn = "Netlify";
+  } else if (headers.get("x-amz-cf-id") || via.includes("cloudfront")) {
+    cdn = "CloudFront";
+  } else if (xServedBy.includes("fastly") || via.includes("fastly") || headers.get("fastly-debug-digest")) {
+    cdn = "Fastly";
+  } else if (headers.get("x-github-request-id")) {
+    cdn = "GitHub Pages";
+  } else if (server.includes("render")) {
+    cdn = "Render";
+  }
+
+  return { cdn, isManagedHost: cdn !== null };
+}
+
+// =============================================================================
+// SOFT 404 DETECTOR — robust catch-all detection with two probes + normalisation
+// =============================================================================
+
+interface Soft404Detector {
+  enabled: boolean;
+  isSoft404: (body: string, status: number) => boolean;
+}
+
+function normaliseForFingerprint(s: string): string {
+  return s
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/\d{8,}/g, "N") // timestamps, long numbers
+    .replace(/[a-f0-9]{16,}/gi, "H") // hashes / IDs
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function structuralSimilarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const len = Math.min(a.length, b.length);
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  if (len / maxLen < 0.6) return 0; // very different lengths
+  let matches = 0;
+  for (let i = 0; i < len; i++) if (a[i] === b[i]) matches++;
+  return matches / maxLen;
+}
+
+async function createSoft404Detector(origin: string): Promise<Soft404Detector> {
+  const probe = async () => {
+    const res = await safeFetch(
+      `${origin}/__nonexistent_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+      { method: "GET", redirect: "manual", timeout: 4000 }
+    );
+    if (!res || res.status !== 200) return null;
+    try {
+      return await res.text();
+    } catch {
+      return null;
+    }
+  };
+
+  const [body1, body2] = await Promise.all([probe(), probe()]);
+  if (!body1 || !body2) return { enabled: false, isSoft404: () => false };
+
+  const fp1 = normaliseForFingerprint(body1).substring(0, 3000);
+  const fp2 = normaliseForFingerprint(body2).substring(0, 3000);
+
+  // Both probes must be structurally similar (catch-all returns same shell)
+  if (structuralSimilarity(fp1, fp2) < 0.85) {
+    return { enabled: false, isSoft404: () => false };
+  }
+
+  return {
+    enabled: true,
+    isSoft404: (body: string, status: number) => {
+      if (status !== 200) return false;
+      const nb = normaliseForFingerprint(body).substring(0, 3000);
+      return structuralSimilarity(nb, fp1) > 0.85 || structuralSimilarity(nb, fp2) > 0.85;
+    },
+  };
+}
+
+// =============================================================================
+// HTML ANALYSIS HELPERS — strip scripts/styles/comments before code heuristics
+// =============================================================================
+
+function stripScriptsStylesComments(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+}
+
+function extractScriptContent(html: string): string {
+  const matches = html.match(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi) || [];
+  return matches.map((m) => m.replace(/<script[^>]*>|<\/script>/gi, "")).join("\n");
 }
 
 // =============================================================================
@@ -121,10 +211,181 @@ async function checkSSL(targetUrl: string, isHttps: boolean): Promise<AuditCheck
 }
 
 // =============================================================================
+// 1b. TLS DETAILS — protocol version, cipher, certificate expiration
+// =============================================================================
+
+interface TlsDetails {
+  protocol: string | null;
+  cipher: { name: string; standardName?: string; version?: string } | null;
+  validFrom: Date | null;
+  validTo: Date | null;
+  issuer: string | null;
+  subject: string | null;
+}
+
+async function fetchTlsDetails(hostname: string, port = 443): Promise<TlsDetails | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (value: TlsDetails | null) => {
+      if (resolved) return;
+      resolved = true;
+      try {
+        socket.destroy();
+      } catch {}
+      resolve(value);
+    };
+    const socket = tls.connect({
+      host: hostname,
+      port,
+      servername: hostname,
+      rejectUnauthorized: false,
+    });
+    const timer = setTimeout(() => finish(null), 8000);
+    socket.once("secureConnect", () => {
+      clearTimeout(timer);
+      try {
+        const protocol = socket.getProtocol();
+        const cipher = socket.getCipher();
+        const cert = socket.getPeerCertificate();
+        finish({
+          protocol,
+          cipher: cipher ? { name: cipher.name, standardName: (cipher as { standardName?: string }).standardName, version: cipher.version } : null,
+          validFrom: cert?.valid_from ? new Date(cert.valid_from) : null,
+          validTo: cert?.valid_to ? new Date(cert.valid_to) : null,
+          issuer: cert?.issuer ? (cert.issuer.O || cert.issuer.CN || null) : null,
+          subject: cert?.subject ? (cert.subject.CN || null) : null,
+        });
+      } catch {
+        finish(null);
+      }
+    });
+    socket.once("error", () => {
+      clearTimeout(timer);
+      finish(null);
+    });
+  });
+}
+
+async function checkTLS(targetUrl: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return checks;
+  }
+  if (parsed.protocol !== "https:") return checks;
+
+  const port = parsed.port ? parseInt(parsed.port) : 443;
+  const details = await fetchTlsDetails(parsed.hostname, port);
+  if (!details) return checks;
+
+  // Protocol version
+  if (details.protocol) {
+    const p = details.protocol;
+    const isOld = p === "TLSv1" || p === "TLSv1.1" || p === "SSLv3";
+    const isAcceptable = p === "TLSv1.2";
+    const isModern = p === "TLSv1.3";
+    checks.push({
+      id: "tls-protocol",
+      category: "ssl",
+      name: "Version TLS négociée",
+      status: isModern ? "pass" : isAcceptable ? "warn" : isOld ? "fail" : "info",
+      severity: isOld ? "high" : isAcceptable ? "low" : undefined,
+      description: isModern
+        ? `Le serveur négocie ${p} — version moderne.`
+        : isAcceptable
+        ? `Le serveur négocie ${p}. Fonctionnel, mais TLS 1.3 est recommandé.`
+        : isOld
+        ? `Le serveur négocie une version obsolète (${p}). Dépréciée et vulnérable.`
+        : `Protocole négocié : ${p}.`,
+      value: p,
+      recommendation: isOld
+        ? "Désactivez TLS 1.0/1.1 et activez TLS 1.3 dans votre configuration serveur."
+        : isAcceptable
+        ? "Activez TLS 1.3 pour de meilleures performances et sécurité."
+        : undefined,
+    });
+  }
+
+  // Cipher
+  if (details.cipher) {
+    const name = (details.cipher.standardName || details.cipher.name || "").toUpperCase();
+    const weak =
+      name.includes("RC4") ||
+      name.includes("3DES") ||
+      name.includes("_DES_") ||
+      name.includes("NULL") ||
+      name.includes("EXPORT") ||
+      name.includes("MD5");
+    checks.push({
+      id: "tls-cipher",
+      category: "ssl",
+      name: "Cipher TLS",
+      status: weak ? "fail" : "pass",
+      severity: weak ? "high" : undefined,
+      description: weak ? `Cipher faible négocié : ${name}.` : `Cipher négocié : ${name}.`,
+      value: name,
+      recommendation: weak ? "Désactivez les ciphers faibles dans votre configuration TLS." : undefined,
+    });
+  }
+
+  // Certificate expiration
+  if (details.validTo) {
+    const msToExpiry = details.validTo.getTime() - Date.now();
+    const daysToExpiry = Math.floor(msToExpiry / 86400000);
+    let status: "pass" | "warn" | "fail" = "pass";
+    let severity: "critical" | "high" | "medium" | "low" | undefined;
+    let description: string;
+    if (daysToExpiry < 0) {
+      status = "fail";
+      severity = "critical";
+      description = `Le certificat SSL est expiré depuis ${Math.abs(daysToExpiry)} jour(s).`;
+    } else if (daysToExpiry < 14) {
+      status = "fail";
+      severity = "high";
+      description = `Le certificat SSL expire dans ${daysToExpiry} jour(s).`;
+    } else if (daysToExpiry < 30) {
+      status = "warn";
+      severity = "medium";
+      description = `Le certificat SSL expire dans ${daysToExpiry} jour(s). Planifiez le renouvellement.`;
+    } else {
+      description = `Certificat valide jusqu'au ${details.validTo.toISOString().split("T")[0]} (${daysToExpiry} jour(s) restants).`;
+    }
+    checks.push({
+      id: "tls-cert-expiry",
+      category: "ssl",
+      name: "Expiration du certificat SSL",
+      status,
+      severity,
+      description,
+      value: details.validTo.toISOString().split("T")[0],
+      recommendation:
+        daysToExpiry < 30
+          ? "Renouvelez le certificat rapidement. Automatisez avec certbot/Let's Encrypt."
+          : undefined,
+    });
+  }
+
+  if (details.issuer) {
+    checks.push({
+      id: "tls-issuer",
+      category: "ssl",
+      name: "Émetteur du certificat",
+      status: "info",
+      description: `Certificat émis par : ${details.issuer}.`,
+      value: details.issuer,
+    });
+  }
+
+  return checks;
+}
+
+// =============================================================================
 // 2. SECURITY HEADERS (OWASP)
 // =============================================================================
 
-function checkSecurityHeaders(headers: Headers): AuditCheck[] {
+function checkSecurityHeaders(headers: Headers, infra: InfraContext): AuditCheck[] {
   const checks: AuditCheck[] = [];
 
   // HSTS
@@ -134,9 +395,11 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
       id: "hsts",
       category: "headers",
       name: "HTTP Strict Transport Security (HSTS)",
-      status: "fail",
-      severity: "high",
-      description: "HSTS absent. Vulnérable aux attaques de downgrade SSL et MITM.",
+      status: "warn",
+      severity: "medium",
+      description: infra.isManagedHost
+        ? `HSTS absent dans la réponse. Votre hébergeur (${infra.cdn}) peut l'appliquer au niveau edge — vérifiez dans votre configuration.`
+        : "HSTS absent. Recommandé pour protéger contre le downgrade SSL une fois la première visite effectuée.",
       recommendation: `Ajoutez l'en-tête HSTS :\n\n# Nginx\nadd_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;\n\n# Apache (.htaccess)\nHeader always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"\n\n// Next.js (next.config.js)\nheaders: [{ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains; preload' }]`,
     });
   } else {
@@ -162,15 +425,15 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
   }
 
   // CSP
-  const csp = headers.get("content-security-policy");
+  const csp = headers.get("content-security-policy") || headers.get("content-security-policy-report-only");
   if (!csp) {
     checks.push({
       id: "csp",
       category: "headers",
       name: "Content Security Policy (CSP)",
-      status: "fail",
-      severity: "high",
-      description: "Aucune CSP définie. Le site est vulnérable aux attaques XSS et injection de code.",
+      status: "warn",
+      severity: "medium",
+      description: "Aucune CSP définie. Recommandée pour réduire l'impact d'une éventuelle XSS, mais non bloquante si les inputs sont correctement échappés côté serveur.",
       recommendation: `Implémentez une Content Security Policy :\n\n# Nginx\nadd_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; frame-ancestors 'self';" always;\n\n// Next.js (next.config.js)\nheaders: [{\n  key: 'Content-Security-Policy',\n  value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;"\n}]`,
     });
   } else {
@@ -199,79 +462,82 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
     });
   }
 
-  // Simple headers
-  const simpleHeaders = [
+  // Headers scored as warn when missing (real security impact)
+  const scoredHeaders = [
     {
       name: "x-content-type-options",
       id: "x-content-type",
       display: "X-Content-Type-Options",
-      severity: "medium" as const,
+      severity: "low" as const,
       rec: "Ajoutez l'en-tête :\n\n# Nginx\nadd_header X-Content-Type-Options \"nosniff\" always;\n\n# Apache\nHeader always set X-Content-Type-Options \"nosniff\"\n\n// Next.js\nheaders: [{ key: 'X-Content-Type-Options', value: 'nosniff' }]",
-      desc: "Empêche le MIME-type sniffing qui peut mener à des attaques XSS.",
+      desc: "Empêche le MIME-type sniffing.",
     },
     {
       name: "x-frame-options",
       id: "x-frame",
       display: "X-Frame-Options (Clickjacking)",
-      severity: "high" as const,
-      rec: "Protégez contre le clickjacking :\n\n# Nginx\nadd_header X-Frame-Options \"DENY\" always;\n\n# Apache\nHeader always set X-Frame-Options \"DENY\"\n\n// Next.js\nheaders: [{ key: 'X-Frame-Options', value: 'DENY' }]\n\nUtilisez SAMEORIGIN si vous avez besoin d'iframes internes.",
-      desc: "Protège contre les attaques de clickjacking via iframe.",
-    },
-    {
-      name: "referrer-policy",
-      id: "referrer",
-      display: "Referrer-Policy",
-      severity: "low" as const,
-      rec: "Contrôlez les informations Referer :\n\n# Nginx\nadd_header Referrer-Policy \"strict-origin-when-cross-origin\" always;\n\n// Next.js\nheaders: [{ key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' }]",
-      desc: "Contrôle les informations envoyées dans le header Referer.",
+      severity: "medium" as const,
+      rec: "Protégez contre le clickjacking :\n\n# Nginx\nadd_header X-Frame-Options \"DENY\" always;\n\n// Next.js\nheaders: [{ key: 'X-Frame-Options', value: 'DENY' }]",
+      desc: "Protège contre le clickjacking via iframe.",
     },
     {
       name: "permissions-policy",
       id: "permissions",
       display: "Permissions-Policy",
-      severity: "medium" as const,
-      rec: "Restreignez les APIs navigateur :\n\n# Nginx\nadd_header Permissions-Policy \"camera=(), microphone=(), geolocation=(), interest-cohort=()\" always;\n\n// Next.js\nheaders: [{ key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' }]",
-      desc: "Contrôle l'accès aux APIs sensibles du navigateur (caméra, micro, géolocalisation).",
-    },
-    {
-      name: "cross-origin-opener-policy",
-      id: "coop",
-      display: "Cross-Origin-Opener-Policy (COOP)",
       severity: "low" as const,
-      rec: "Ajoutez: Cross-Origin-Opener-Policy: same-origin",
-      desc: "Isole le contexte de navigation pour prévenir les attaques cross-origin.",
-    },
-    {
-      name: "cross-origin-resource-policy",
-      id: "corp",
-      display: "Cross-Origin-Resource-Policy (CORP)",
-      severity: "low" as const,
-      rec: "Ajoutez: Cross-Origin-Resource-Policy: same-origin",
-      desc: "Empêche le chargement cross-origin non autorisé des ressources.",
-    },
-    {
-      name: "cross-origin-embedder-policy",
-      id: "coep",
-      display: "Cross-Origin-Embedder-Policy (COEP)",
-      severity: "low" as const,
-      rec: "Ajoutez: Cross-Origin-Embedder-Policy: require-corp",
-      desc: "Requiert CORP/CORS pour toutes les ressources cross-origin embarquées.",
+      rec: "Restreignez les APIs navigateur :\n\n# Nginx\nadd_header Permissions-Policy \"camera=(), microphone=(), geolocation=()\" always;",
+      desc: "Contrôle l'accès aux APIs sensibles du navigateur.",
     },
   ];
 
-  for (const h of simpleHeaders) {
+  // X-Frame-Options is satisfied if CSP frame-ancestors is present
+  const hasFrameAncestors = csp?.includes("frame-ancestors") ?? false;
+
+  for (const h of scoredHeaders) {
     const value = headers.get(h.name);
+    if (!value && h.id === "x-frame" && hasFrameAncestors) {
+      checks.push({
+        id: h.id,
+        category: "headers",
+        name: h.display,
+        status: "pass",
+        description: "Remplacé par la directive CSP frame-ancestors (équivalent moderne).",
+      });
+      continue;
+    }
     checks.push({
       id: h.id,
       category: "headers",
       name: h.display,
-      status: value ? "pass" : "fail",
+      status: value ? "pass" : "warn",
       severity: !value ? h.severity : undefined,
       description: value
         ? `${h.display} est configuré. ${h.desc}`
         : `${h.display} est absent. ${h.desc}`,
       value: value || undefined,
       recommendation: !value ? h.rec : undefined,
+    });
+  }
+
+  // Informational-only headers (bonnes pratiques, ne pénalisent pas le score)
+  const infoHeaders = [
+    { name: "referrer-policy", id: "referrer", display: "Referrer-Policy", desc: "Contrôle les informations envoyées dans le header Referer." },
+    { name: "cross-origin-opener-policy", id: "coop", display: "Cross-Origin-Opener-Policy (COOP)", desc: "Isole le contexte de navigation pour prévenir les attaques cross-origin." },
+    { name: "cross-origin-resource-policy", id: "corp", display: "Cross-Origin-Resource-Policy (CORP)", desc: "Empêche le chargement cross-origin non autorisé des ressources." },
+    { name: "cross-origin-embedder-policy", id: "coep", display: "Cross-Origin-Embedder-Policy (COEP)", desc: "Requiert CORP/CORS pour toutes les ressources cross-origin embarquées." },
+  ];
+
+  for (const h of infoHeaders) {
+    const value = headers.get(h.name);
+    checks.push({
+      id: h.id,
+      category: "headers",
+      name: h.display,
+      status: value ? "pass" : "info",
+      description: value
+        ? `${h.display} est configuré.`
+        : `${h.display} non défini. ${h.desc} Bonne pratique, rarement critique.`,
+      value: value || undefined,
     });
   }
 
@@ -298,22 +564,21 @@ function checkSecurityHeaders(headers: Headers): AuditCheck[] {
 function checkInfoLeakage(headers: Headers): AuditCheck[] {
   const checks: AuditCheck[] = [];
 
-  // Server header
+  // Server header — présence d'une version = info (cosmétique, pas exploitable directement)
   const server = headers.get("server");
   if (server) {
-    const hasVersion = /[\d.]+/.test(server);
+    const hasVersion = /\d+\.\d+/.test(server);
     checks.push({
       id: "server-header",
       category: "info-leak",
       name: "En-tête Server",
-      status: hasVersion ? "warn" : "info",
-      severity: hasVersion ? "medium" : undefined,
+      status: "info",
       description: hasVersion
-        ? `Le serveur révèle sa version : "${server}". Cela facilite les attaques ciblées.`
+        ? `Le serveur s'identifie comme "${server}" (version visible). Recommandation cosmétique : masquer la version.`
         : `Le serveur s'identifie comme "${server}".`,
       value: server,
       recommendation: hasVersion
-        ? "Masquez la version du serveur. Nginx: server_tokens off; Apache: ServerTokens Prod"
+        ? "Masquez la version du serveur si souhaité. Nginx: server_tokens off; Apache: ServerTokens Prod"
         : undefined,
     });
   } else {
@@ -326,18 +591,17 @@ function checkInfoLeakage(headers: Headers): AuditCheck[] {
     });
   }
 
-  // X-Powered-By
+  // X-Powered-By — cosmétique
   const poweredBy = headers.get("x-powered-by");
   if (poweredBy) {
     checks.push({
       id: "x-powered-by",
       category: "info-leak",
       name: "X-Powered-By",
-      status: "warn",
-      severity: "medium",
-      description: `Le site révèle sa technologie : "${poweredBy}".`,
+      status: "info",
+      description: `Le site expose sa technologie : "${poweredBy}". Information cosmétique, faible impact.`,
       value: poweredBy,
-      recommendation: "Supprimez X-Powered-By. Express: app.disable('x-powered-by'); PHP: expose_php = Off",
+      recommendation: "Supprimez X-Powered-By si souhaité. Express: app.disable('x-powered-by'); PHP: expose_php = Off",
     });
   } else {
     checks.push({
@@ -349,33 +613,153 @@ function checkInfoLeakage(headers: Headers): AuditCheck[] {
     });
   }
 
-  // X-AspNet-Version
+  // X-AspNet-Version — vraie fuite (version précise, historique de CVEs)
   const aspVersion = headers.get("x-aspnet-version");
   if (aspVersion) {
     checks.push({
       id: "x-aspnet",
       category: "info-leak",
       name: "X-AspNet-Version",
-      status: "fail",
-      severity: "high",
+      status: "warn",
+      severity: "low",
       description: `Version ASP.NET exposée : "${aspVersion}".`,
       value: aspVersion,
       recommendation: "Désactivez dans web.config: <httpRuntime enableVersionHeader=\"false\" />",
     });
   }
 
-  // X-Generator
+  // X-Generator — purement cosmétique
   const generator = headers.get("x-generator");
   if (generator) {
     checks.push({
       id: "x-generator",
       category: "info-leak",
       name: "X-Generator",
-      status: "warn",
-      severity: "low",
-      description: `Générateur exposé : "${generator}".`,
+      status: "info",
+      description: `Générateur exposé : "${generator}". Information cosmétique.`,
       value: generator,
-      recommendation: "Supprimez l'en-tête X-Generator de votre configuration.",
+      recommendation: "Supprimez l'en-tête X-Generator si souhaité.",
+    });
+  }
+
+  return checks;
+}
+
+// =============================================================================
+// 3b. EXPOSED SECRETS — scan HTML + inline scripts for high-value credentials
+// =============================================================================
+
+interface SecretPattern {
+  id: string;
+  name: string;
+  regex: RegExp;
+  severity: "critical" | "high" | "medium";
+}
+
+const SECRET_PATTERNS: SecretPattern[] = [
+  { id: "aws-access-key", name: "AWS Access Key", regex: /\bAKIA[0-9A-Z]{16}\b/, severity: "critical" },
+  { id: "aws-secret-ref", name: "AWS Secret Access Key (contextuel)", regex: /aws_secret_access_key\s*[:=]\s*["'][A-Za-z0-9/+=]{40}["']/i, severity: "critical" },
+  { id: "stripe-live", name: "Clé secrète Stripe (live)", regex: /\bsk_live_[A-Za-z0-9]{24,}\b/, severity: "critical" },
+  { id: "stripe-test", name: "Clé secrète Stripe (test)", regex: /\bsk_test_[A-Za-z0-9]{24,}\b/, severity: "high" },
+  { id: "stripe-restricted", name: "Clé restricted Stripe", regex: /\brk_(live|test)_[A-Za-z0-9]{24,}\b/, severity: "critical" },
+  { id: "github-pat", name: "GitHub Personal Access Token", regex: /\bghp_[A-Za-z0-9]{36}\b/, severity: "critical" },
+  { id: "github-oauth", name: "GitHub OAuth Token", regex: /\bgho_[A-Za-z0-9]{36}\b/, severity: "critical" },
+  { id: "github-fine-grained", name: "GitHub Fine-grained Token", regex: /\bgithub_pat_[A-Za-z0-9_]{82}\b/, severity: "critical" },
+  { id: "slack-token", name: "Slack Token", regex: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/, severity: "critical" },
+  { id: "slack-webhook", name: "Slack Webhook URL", regex: /https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]{24}/, severity: "high" },
+  { id: "private-key", name: "Clé privée", regex: /-----BEGIN (?:RSA|OPENSSH|EC|DSA|PGP)\s+PRIVATE KEY-----/, severity: "critical" },
+  { id: "sendgrid", name: "Clé API SendGrid", regex: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/, severity: "critical" },
+  { id: "mailgun", name: "Clé API Mailgun", regex: /(?:mailgun|mg_api_key|mailgun_api_key|MAILGUN_[A-Z_]+)[\s\S]{0,120}?\bkey-[a-f0-9]{32}\b/i, severity: "critical" },
+  { id: "twilio-sk", name: "Twilio API Key", regex: /(?:twilio|accountSid|authToken|TWILIO_[A-Z_]+)[\s\S]{0,120}?\bSK[a-f0-9]{32}\b/i, severity: "critical" },
+  { id: "openai", name: "Clé API OpenAI", regex: /\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b/, severity: "critical" },
+  { id: "anthropic", name: "Clé API Anthropic", regex: /\bsk-ant-[A-Za-z0-9_-]{40,}\b/, severity: "critical" },
+];
+
+// Strip blocks where secrets are usually documented (code samples in blog posts), not deployed.
+function stripDocumentationBlocks(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<pre\b[\s\S]*?<\/pre>/gi, "")
+    .replace(/<code\b[\s\S]*?<\/code>/gi, "");
+}
+
+// Detects Supabase service_role JWTs: the payload (middle segment) is base64url-encoded
+// JSON with { "role": "service_role" } — keyword can't be matched on the raw token.
+function findSupabaseServiceRoleToken(source: string): string | null {
+  const jwtRegex = /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = jwtRegex.exec(source)) !== null) {
+    const parts = match[0].split(".");
+    if (parts.length !== 3) continue;
+    try {
+      const payload = Buffer.from(
+        parts[1].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(parts[1].length / 4) * 4, "="),
+        "base64"
+      ).toString("utf8");
+      const json = JSON.parse(payload);
+      if (json && typeof json === "object" && json.role === "service_role") {
+        return match[0];
+      }
+    } catch {
+      // Not a valid JWT payload
+    }
+  }
+  return null;
+}
+
+function redactSecret(raw: string): string {
+  return raw.length > 20 ? `${raw.slice(0, 8)}…${raw.slice(-4)}` : raw;
+}
+
+function checkSecretsExposure(html: string): AuditCheck[] {
+  const checks: AuditCheck[] = [];
+  const sourceForScan = stripDocumentationBlocks(html);
+
+  const findings: { id: string; name: string; severity: "critical" | "high" | "medium"; sample: string }[] = [];
+
+  for (const pattern of SECRET_PATTERNS) {
+    const match = pattern.regex.exec(sourceForScan);
+    if (match) {
+      findings.push({ id: pattern.id, name: pattern.name, severity: pattern.severity, sample: redactSecret(match[0]) });
+    }
+  }
+
+  // Supabase service_role JWT — decoded, not regex-matched on the raw token
+  const supabaseToken = findSupabaseServiceRoleToken(sourceForScan);
+  if (supabaseToken) {
+    findings.push({
+      id: "supabase-service",
+      name: "Supabase service_role JWT",
+      severity: "critical",
+      sample: redactSecret(supabaseToken),
+    });
+  }
+
+  if (findings.length === 0) {
+    checks.push({
+      id: "secrets-scan",
+      category: "info-leak",
+      name: "Secrets exposés dans le HTML",
+      status: "pass",
+      description: "Aucun secret à haute valeur (AWS/Stripe/GitHub/Slack/clé privée/Supabase service_role…) détecté.",
+    });
+    return checks;
+  }
+
+  const severityRank = { critical: 0, high: 1, medium: 2 } as const;
+  findings.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
+
+  for (const finding of findings) {
+    checks.push({
+      id: `secret-${finding.id}`,
+      category: "info-leak",
+      name: `Secret exposé : ${finding.name}`,
+      status: "fail",
+      severity: finding.severity,
+      description: `${finding.name} détecté dans le HTML ou un script inline. Ces secrets ne doivent JAMAIS être présents côté client.`,
+      value: finding.sample,
+      recommendation: "Révoquez ce secret immédiatement, régénérez-le, et déplacez-le côté serveur (variables d'environnement, secret manager).",
     });
   }
 
@@ -385,6 +769,36 @@ function checkInfoLeakage(headers: Headers): AuditCheck[] {
 // =============================================================================
 // 4. COOKIES
 // =============================================================================
+
+// Cookies analytics/tracking (tiers ou first-party instrumentés) — ne pas
+// pénaliser comme un cookie de session quand HttpOnly manque (JS doit y accéder).
+const TRACKING_COOKIE_PATTERNS = [
+  /^_ga/i, /^_gid$/i, /^_gcl/i, /^_gat/i, /^_fbp$/i, /^_fbc$/i,
+  /^_hj/i, /^_pin_/i, /^_tt_/i, /^_uetsid$/i, /^_uetvid$/i,
+  /^ajs_/i, /^amplitude_/i, /^mp_/i, /^intercom/i, /^__hs/i,
+  /^NID$/i, /^IDE$/i, /^VISITOR_INFO/i, /^YSC$/i, /^PREF$/i,
+];
+
+function classifyCookie(name: string): "session" | "tracking" | "other" {
+  const lower = name.toLowerCase();
+  if (TRACKING_COOKIE_PATTERNS.some((r) => r.test(name))) return "tracking";
+  if (
+    lower.includes("session") ||
+    lower === "sid" ||
+    lower.endsWith("_sid") ||
+    lower.includes("auth") ||
+    lower.includes("token") ||
+    lower.includes("csrf") ||
+    lower.includes("xsrf") ||
+    lower === "phpsessid" ||
+    lower === "jsessionid" ||
+    lower === "connect.sid" ||
+    lower.startsWith("wordpress_logged_in")
+  ) {
+    return "session";
+  }
+  return "other";
+}
 
 function checkCookies(headers: Headers): AuditCheck[] {
   const checks: AuditCheck[] = [];
@@ -404,28 +818,61 @@ function checkCookies(headers: Headers): AuditCheck[] {
   for (const cookie of setCookies) {
     const name = cookie.split("=")[0]?.trim() || "inconnu";
     const lower = cookie.toLowerCase();
+    const kind = classifyCookie(name);
+
+    const missingSecure = !lower.includes("secure");
+    const missingHttpOnly = !lower.includes("httponly");
+    const missingSameSite = !lower.includes("samesite");
+
+    // Cookies de tracking : souvent set par des scripts tiers sans HttpOnly (normal).
+    // On ne signale que si le cookie est servi en clair (Secure absent sur HTTPS).
+    if (kind === "tracking") {
+      checks.push({
+        id: `cookie-${name}`,
+        category: "cookies",
+        name: `Cookie tiers/analytics : ${name}`,
+        status: missingSecure ? "info" : "pass",
+        description: missingSecure
+          ? `Cookie de tracking "${name}" sans flag Secure. Peu impactant (données non sensibles).`
+          : `Cookie de tracking "${name}" correctement configuré.`,
+        value: cookie.length > 150 ? cookie.substring(0, 150) + "..." : cookie,
+      });
+      continue;
+    }
+
     const issues: string[] = [];
+    if (missingSecure) issues.push("Secure");
+    // HttpOnly n'est pertinent que pour cookies de session/auth
+    if (missingHttpOnly && kind === "session") issues.push("HttpOnly");
+    if (missingSameSite) issues.push("SameSite");
 
-    if (!lower.includes("secure")) issues.push("Secure");
-    if (!lower.includes("httponly")) issues.push("HttpOnly");
-    if (!lower.includes("samesite")) issues.push("SameSite");
+    let status: "pass" | "warn" | "fail" = "pass";
+    let severity: "critical" | "high" | "medium" | "low" | undefined;
 
-    const isSession = name.toLowerCase().includes("session") || name.toLowerCase().includes("sid");
+    if (issues.length > 0) {
+      if (kind === "session" && (missingSecure || missingHttpOnly)) {
+        status = "fail";
+        severity = missingSecure && missingHttpOnly ? "high" : "medium";
+      } else {
+        status = "warn";
+        severity = "low";
+      }
+    }
 
     checks.push({
       id: `cookie-${name}`,
       category: "cookies",
       name: `Cookie: ${name}`,
-      status: issues.length === 0 ? "pass" : issues.length >= 2 ? "fail" : "warn",
-      severity: issues.length >= 2 && isSession ? "critical" : issues.length >= 2 ? "high" : issues.length > 0 ? "medium" : undefined,
+      status,
+      severity,
       description:
         issues.length === 0
-          ? `"${name}" a tous les attributs de sécurité.`
-          : `"${name}" : attributs manquants — ${issues.join(", ")}.${isSession ? " ⚠️ Cookie de session !" : ""}`,
+          ? `"${name}" a tous les attributs de sécurité nécessaires.`
+          : `"${name}" : attributs manquants — ${issues.join(", ")}.${kind === "session" ? " (cookie de session)" : ""}`,
       value: cookie.length > 150 ? cookie.substring(0, 150) + "..." : cookie,
       recommendation:
         issues.length > 0
-          ? `Ajoutez: ${issues.map((i) => i === "SameSite" ? "SameSite=Strict" : i).join("; ")}`
+          ? `Ajoutez: ${issues.map((i) => (i === "SameSite" ? "SameSite=Lax" : i)).join("; ")}`
           : undefined,
     });
   }
@@ -437,70 +884,31 @@ function checkCookies(headers: Headers): AuditCheck[] {
 // 5. OWASP — Sensitive Files & Directories
 // =============================================================================
 
-async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> {
+async function checkOWASP(baseUrl: string, html: string, soft404: Soft404Detector): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
 
-  // ── SOFT 404 DETECTION ──────────────────────────────────────
-  // Fetch a random non-existent path to get the "soft 404" fingerprint.
-  // Many SPAs / catch-all servers return 200 with the same HTML for any URL.
-  // We compare each probe response against this fingerprint to detect fakes.
-  let soft404Fingerprint = "";
-  let soft404Length = 0;
-  try {
-    const probe = await safeFetch(
-      `${origin}/__soft404_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      { method: "GET", redirect: "manual", timeout: 4000 }
-    );
-    if (probe && probe.status === 200) {
-      const body = await probe.text();
-      soft404Length = body.length;
-      // Use first 500 chars as fingerprint (avoids dynamic tokens but catches structure)
-      soft404Fingerprint = body.substring(0, 500);
-    }
-  } catch {
-    // If probe fails, no soft 404 detection — rely on content checks only
-  }
-
-  function isSoft404(body: string): boolean {
-    if (!soft404Fingerprint) return false;
-    // Same length (±5%) AND same first 500 chars → soft 404
-    const lengthSimilar = Math.abs(body.length - soft404Length) / Math.max(soft404Length, 1) < 0.05;
-    const contentSimilar = body.substring(0, 500) === soft404Fingerprint;
-    return lengthSimilar && contentSimilar;
-  }
-
-  // Sensitive paths to probe
-  // contentCheck: strict regex to verify the response body is genuinely the expected file/page
-  // NOT an HTML page that happens to contain the keyword
+  // Sensitive paths — validated via strict content signature (not just keyword presence)
   const sensitivePaths = [
-    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)", contentCheck: /^[A-Z_]+=.+$/m, mustNotBeHtml: true },
-    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git", contentCheck: /^ref:\s+refs\//, mustNotBeHtml: true },
-    { path: "/wp-admin/", name: "WordPress Admin", severity: "high" as const, desc: "Interface d'administration WordPress", contentCheck: /wp-login\.php/, mustNotBeHtml: false },
-    { path: "/wp-login.php", name: "WordPress Login", severity: "medium" as const, desc: "Page de connexion WordPress", contentCheck: /name="log"[\s\S]*name="pwd"|wp-login\.php\?action=/i, mustNotBeHtml: false },
-    { path: "/xmlrpc.php", name: "WordPress XML-RPC", severity: "high" as const, desc: "API XML-RPC (vecteur de brute-force)", contentCheck: /XML-RPC server accepts POST requests only/i, mustNotBeHtml: true },
-    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /phpMyAdmin|pma_navigation/i, mustNotBeHtml: false },
-    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /adminer\.design|adminer\.js|name="auth\[/i, mustNotBeHtml: false },
-    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache", contentCheck: /Apache Server Status for|Total Accesses:/i, mustNotBeHtml: false },
-    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée", contentCheck: /Apache Server Information|Server Version:/i, mustNotBeHtml: false },
-    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache", contentCheck: /RewriteEngine|RewriteRule|RewriteCond/i, mustNotBeHtml: true },
-    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET", contentCheck: /^<\?xml[^]*<configuration/i, mustNotBeHtml: true },
-    { path: "/robots.txt", name: "robots.txt", severity: "info" as const, desc: "Directives pour les moteurs de recherche", contentCheck: /^User-agent:/im, mustNotBeHtml: true },
-    { path: "/sitemap.xml", name: "sitemap.xml", severity: "info" as const, desc: "Plan du site pour les moteurs de recherche", contentCheck: /^<\?xml[^]*<urlset|^<\?xml[^]*<sitemapindex/i, mustNotBeHtml: true },
-    { path: "/backup.zip", name: "Fichier de sauvegarde", severity: "critical" as const, desc: "Archive de sauvegarde exposée", contentCheck: /^PK\x03\x04/, mustNotBeHtml: true, contentType: "application/zip" },
-    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé", contentCheck: /^--|^\/\*|CREATE TABLE|INSERT INTO|DROP TABLE|mysqldump/im, mustNotBeHtml: true },
-    { path: "/debug", name: "Page de debug", severity: "high" as const, desc: "Interface de débogage", contentCheck: /Traceback \(most recent|<div class="traceback|Django Debug|Symfony Profiler|laravel_debugbar/i, mustNotBeHtml: false },
-    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP", contentCheck: /phpinfo\(\)|PHP Version \d|Configuration File/i, mustNotBeHtml: false },
-    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées", contentCheck: /phpinfo\(\)|PHP Version \d/i, mustNotBeHtml: false },
-    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "medium" as const, desc: "Métadonnées macOS (structure de répertoire)", contentCheck: /Bud1/, mustNotBeHtml: true, contentType: "application/octet-stream" },
-    { path: "/wp-json/wp/v2/users", name: "WordPress REST API Users", severity: "high" as const, desc: "Énumération des utilisateurs WordPress", contentCheck: /^\s*\[[\s\S]*"slug"\s*:/i, mustNotBeHtml: true },
-    { path: "/api/", name: "Répertoire API", severity: "info" as const, desc: "Point d'entrée API détecté", contentCheck: null, mustNotBeHtml: false },
+    { path: "/.env", name: "Fichier .env", severity: "critical" as const, desc: "Variables d'environnement (clés API, mots de passe)", contentCheck: /^[A-Z][A-Z0-9_]+=[^\n<]{1,200}$/m, mustNotBeHtml: true },
+    { path: "/.git/HEAD", name: "Répertoire .git", severity: "critical" as const, desc: "Code source et historique Git", contentCheck: /^ref:\s+refs\/heads\/[\w.-]+\s*$/, mustNotBeHtml: true },
+    { path: "/.git/config", name: "Configuration .git", severity: "critical" as const, desc: "Configuration Git exposée", contentCheck: /\[core\]|\[remote "/, mustNotBeHtml: true },
+    { path: "/phpmyadmin/", name: "phpMyAdmin", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /phpMyAdmin|pma_navigation|<form[^>]+name="login_form"/i, mustNotBeHtml: false },
+    { path: "/adminer.php", name: "Adminer", severity: "critical" as const, desc: "Interface de gestion de base de données", contentCheck: /Adminer [\d.]+|<title>[^<]*Adminer|name="auth\[server\]"/i, mustNotBeHtml: false },
+    { path: "/server-status", name: "Apache Server Status", severity: "high" as const, desc: "Informations internes du serveur Apache", contentCheck: /Apache Server Status for |Total Accesses:\s*\d/, mustNotBeHtml: false },
+    { path: "/server-info", name: "Apache Server Info", severity: "high" as const, desc: "Configuration Apache exposée", contentCheck: /Apache Server Information|<h1>Apache Server Information/, mustNotBeHtml: false },
+    { path: "/.htaccess", name: "Fichier .htaccess", severity: "high" as const, desc: "Configuration Apache", contentCheck: /^\s*RewriteEngine\s+(on|off)|^\s*Options\s+[+-]?\w+/im, mustNotBeHtml: true },
+    { path: "/web.config", name: "Fichier web.config", severity: "high" as const, desc: "Configuration IIS/ASP.NET", contentCheck: /^\s*<\?xml[\s\S]*?<configuration\b/i, mustNotBeHtml: true },
+    { path: "/backup.zip", name: "Fichier de sauvegarde ZIP", severity: "critical" as const, desc: "Archive de sauvegarde exposée", contentCheck: null, mustNotBeHtml: true, contentType: "application/zip" },
+    { path: "/backup.sql", name: "Dump SQL", severity: "critical" as const, desc: "Dump de base de données exposé", contentCheck: /^(--|\/\*!)|CREATE TABLE\s+[`"]|INSERT INTO\s+[`"]|mysqldump/im, mustNotBeHtml: true },
+    { path: "/phpinfo.php", name: "phpinfo()", severity: "high" as const, desc: "Informations complètes sur la configuration PHP", contentCheck: /<title>phpinfo\(\)/i, mustNotBeHtml: false },
+    { path: "/info.php", name: "info.php", severity: "high" as const, desc: "Informations PHP exposées", contentCheck: /<title>phpinfo\(\)/i, mustNotBeHtml: false },
+    { path: "/.DS_Store", name: "Fichier .DS_Store", severity: "low" as const, desc: "Métadonnées macOS (structure de répertoire)", contentCheck: null, mustNotBeHtml: true, contentType: "application/octet-stream", magicBytes: "Bud1" },
   ];
 
   const exposed: AuditCheck[] = [];
   const safe: string[] = [];
 
-  // Parallel fetch — use GET to validate response body + soft 404 detection
   const results = await Promise.all(
     sensitivePaths.map(async (item) => {
       const res = await safeFetch(`${origin}${item.path}`, {
@@ -509,36 +917,36 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
         timeout: 3000,
       });
       let bodyMatch = false;
-      if (res && res.status === 200 && item.contentCheck) {
+      if (res && res.status === 200) {
         try {
           const contentType = res.headers.get("content-type") || "";
-          // For binary files, check content-type instead of body
-          if (item.contentType) {
-            bodyMatch = contentType.includes(item.contentType);
-          } else {
-            const body = await res.text();
 
-            // Soft 404 detection — if response matches the catch-all page, skip
-            if (isSoft404(body)) {
-              bodyMatch = false;
-            } else {
-              // If file must NOT be HTML but response is HTML → false positive
-              if (item.mustNotBeHtml && (contentType.includes("text/html") || body.trimStart().startsWith("<!") || body.trimStart().startsWith("<html"))) {
-                bodyMatch = false;
-              } else {
-                const snippet = body.substring(0, 5000);
-                bodyMatch = item.contentCheck.test(snippet);
-              }
+          if (item.contentType && !contentType.includes(item.contentType)) {
+            // Expected a specific binary type but got something else → false positive
+            return { item, status: res.status, bodyMatch: false };
+          }
+
+          const body = await res.text();
+
+          if (soft404.isSoft404(body, res.status)) {
+            return { item, status: res.status, bodyMatch: false };
+          }
+
+          if (item.mustNotBeHtml) {
+            const startsWithHtml = /^\s*<(?:!doctype|html|head|body)/i.test(body);
+            if (contentType.includes("text/html") || startsWithHtml) {
+              return { item, status: res.status, bodyMatch: false };
             }
           }
-        } catch {
-          bodyMatch = false;
-        }
-      } else if (res && res.status === 200 && !item.contentCheck) {
-        // No content check needed (e.g. /api/) — but still check soft 404
-        try {
-          const body = await res.text();
-          bodyMatch = !isSoft404(body);
+
+          if ("magicBytes" in item && item.magicBytes) {
+            bodyMatch = body.startsWith(item.magicBytes);
+          } else if (item.contentCheck) {
+            bodyMatch = item.contentCheck.test(body.substring(0, 5000));
+          } else if (item.contentType) {
+            // No content regex but content-type matched
+            bodyMatch = true;
+          }
         } catch {
           bodyMatch = false;
         }
@@ -548,7 +956,7 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
   );
 
   for (const { item, status, bodyMatch } of results) {
-    if (status === 200 && bodyMatch && item.severity !== "info") {
+    if (status === 200 && bodyMatch) {
       exposed.push({
         id: `owasp-${item.path.replace(/[/.]/g, "-")}`,
         category: "owasp",
@@ -559,29 +967,18 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
         value: `${origin}${item.path} → HTTP ${status}`,
         recommendation: `Bloquez l'accès à ${item.path} via votre serveur web ou .htaccess.`,
       });
-    } else if (status === 200 && bodyMatch && item.severity === "info") {
-      checks.push({
-        id: `owasp-${item.path.replace(/[/.]/g, "-")}`,
-        category: "owasp",
-        name: item.name,
-        status: "info",
-        description: `${item.name} est accessible.`,
-        value: `${origin}${item.path}`,
-      });
     } else {
       safe.push(item.path);
     }
   }
 
-  // Soft 404 warning — if catch-all detected, inform user
-  if (soft404Fingerprint) {
+  if (soft404.enabled) {
     checks.push({
       id: "owasp-soft404",
       category: "owasp",
       name: "Détection Soft 404 (Catch-All)",
       status: "info",
-      description: "Le serveur retourne HTTP 200 pour les pages inexistantes au lieu de 404. Cela peut masquer des problèmes réels et tromper les scanners.",
-      recommendation: "Configurez votre serveur pour retourner un vrai status 404 pour les pages inexistantes.",
+      description: "Le serveur retourne HTTP 200 pour les pages inexistantes. Courant sur les SPA (Next.js, Nuxt, React Router) — les probes utilisent une empreinte structurelle pour éviter les faux positifs.",
     });
   }
 
@@ -597,50 +994,63 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
     });
   }
 
-  // HTTP Methods
+  // HTTP Methods — info only (CDN/framework filtrent souvent ; vrai risque rare)
   const optionsRes = await safeFetch(baseUrl, { method: "OPTIONS", timeout: 3000 });
   if (optionsRes) {
     const allow = optionsRes.headers.get("allow") || optionsRes.headers.get("access-control-allow-methods") || "";
-    const dangerous = ["PUT", "DELETE", "TRACE", "CONNECT"].filter((m) =>
-      allow.toUpperCase().includes(m)
-    );
-    checks.push({
-      id: "http-methods",
-      category: "owasp",
-      name: "Méthodes HTTP dangereuses",
-      status: dangerous.length > 0 ? "warn" : "pass",
-      severity: dangerous.length > 0 ? "medium" : undefined,
-      description:
-        dangerous.length > 0
-          ? `Méthodes dangereuses activées : ${dangerous.join(", ")}.`
-          : "Aucune méthode HTTP dangereuse détectée.",
-      value: allow || undefined,
-      recommendation:
-        dangerous.length > 0
-          ? `Désactivez les méthodes ${dangerous.join(", ")} dans la configuration serveur.`
-          : undefined,
-    });
+    const dangerous = ["TRACE", "CONNECT"].filter((m) => allow.toUpperCase().includes(m));
+    if (dangerous.length > 0) {
+      checks.push({
+        id: "http-methods",
+        category: "owasp",
+        name: "Méthodes HTTP dangereuses",
+        status: "warn",
+        severity: "low",
+        description: `Méthodes potentiellement dangereuses activées : ${dangerous.join(", ")}. Risque réel faible (bloquées par les navigateurs modernes).`,
+        value: allow,
+        recommendation: `Désactivez ${dangerous.join(", ")} dans la configuration serveur.`,
+      });
+    } else if (allow) {
+      checks.push({
+        id: "http-methods",
+        category: "owasp",
+        name: "Méthodes HTTP autorisées",
+        status: "info",
+        description: `Méthodes disponibles : ${allow}.`,
+        value: allow,
+      });
+    }
   }
 
-  // CORS check
+  // CORS — wildcard n'est pas critique si pas de credentials
   const corsRes = await safeFetch(baseUrl, {
-    headers: { Origin: "https://evil-attacker.com" } as Record<string, string>,
+    headers: { Origin: "https://evil-attacker.example" } as Record<string, string>,
     timeout: 3000,
   });
   if (corsRes) {
     const acao = corsRes.headers.get("access-control-allow-origin");
-    if (acao === "*") {
+    const allowCreds = corsRes.headers.get("access-control-allow-credentials")?.toLowerCase() === "true";
+    if (acao === "*" && allowCreds) {
+      checks.push({
+        id: "cors-wildcard-creds",
+        category: "owasp",
+        name: "CORS : wildcard avec credentials",
+        status: "fail",
+        severity: "high",
+        description: "Access-Control-Allow-Origin: * combiné avec Allow-Credentials: true. Combinaison refusée par les navigateurs mais indique une configuration incorrecte.",
+        value: acao,
+        recommendation: "Spécifiez une origine précise ou retirez Allow-Credentials.",
+      });
+    } else if (acao === "*") {
       checks.push({
         id: "cors-wildcard",
         category: "owasp",
         name: "CORS Wildcard (*)",
-        status: "warn",
-        severity: "medium",
-        description: "Access-Control-Allow-Origin est configuré sur '*'. Tout domaine peut effectuer des requêtes cross-origin.",
+        status: "info",
+        description: "Access-Control-Allow-Origin: *. Acceptable pour une API publique sans authentification par cookie. À restreindre pour des endpoints privés.",
         value: acao,
-        recommendation: "Restreignez CORS aux domaines de confiance uniquement.",
       });
-    } else if (acao === "https://evil-attacker.com") {
+    } else if (acao === "https://evil-attacker.example") {
       checks.push({
         id: "cors-reflect",
         category: "owasp",
@@ -651,60 +1061,179 @@ async function checkOWASP(baseUrl: string, html: string): Promise<AuditCheck[]> 
         value: acao,
         recommendation: "N'utilisez JAMAIS la réflection d'origine. Utilisez une whitelist de domaines.",
       });
-    } else {
+    } else if (acao) {
       checks.push({
         id: "cors",
         category: "owasp",
         name: "Configuration CORS",
         status: "pass",
-        description: acao
-          ? `CORS correctement restreint à : ${acao}`
-          : "Pas d'en-tête CORS permissif détecté.",
-        value: acao || undefined,
+        description: `CORS restreint à : ${acao}`,
+        value: acao,
       });
     }
   }
 
-  // SRI (Subresource Integrity) check
-  const scripts = html.match(/<script[^>]+src[^>]+>/gi) || [];
-  const externalScripts = scripts.filter(
-    (s) => s.includes("http://") || s.includes("https://")
-  );
-  const withSRI = externalScripts.filter((s) => s.includes("integrity="));
-  if (externalScripts.length > 0) {
+  // SRI — uniquement sur les CDNs externes (les bundles self-hosted avec hash dans l'URL ont déjà l'intégrité)
+  const cleanHtml = stripScriptsStylesComments(html);
+  // Extract only script tags with src (we need original html for this, not stripped)
+  const scriptTags = html.match(/<script\b[^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*>/gi) || [];
+  const origin_ = origin;
+  const thirdPartyCdns = /(\/\/)(?:cdn\.|cdnjs\.|unpkg\.com|jsdelivr\.net|ajax\.googleapis\.com|code\.jquery\.com|maxcdn\.)/i;
+  const externalScripts = scriptTags.filter((s) => {
+    const m = s.match(/src\s*=\s*["']([^"']+)["']/i);
+    if (!m) return false;
+    const src = m[1];
+    if (src.startsWith("//") || src.startsWith("http://") || src.startsWith("https://")) {
+      try {
+        const u = new URL(src.startsWith("//") ? `https:${src}` : src);
+        return u.origin !== origin_;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
+  const thirdPartyCdnScripts = externalScripts.filter((s) => thirdPartyCdns.test(s));
+  if (thirdPartyCdnScripts.length > 0) {
+    const withSRI = thirdPartyCdnScripts.filter((s) => s.includes("integrity="));
     checks.push({
       id: "sri",
       category: "owasp",
       name: "Subresource Integrity (SRI)",
-      status: withSRI.length === externalScripts.length ? "pass" : "warn",
-      severity: withSRI.length < externalScripts.length ? "medium" : undefined,
+      status: withSRI.length === thirdPartyCdnScripts.length ? "pass" : "info",
       description:
-        withSRI.length === externalScripts.length
-          ? `Tous les ${externalScripts.length} scripts externes ont un attribut integrity.`
-          : `${withSRI.length}/${externalScripts.length} scripts externes ont un attribut integrity.`,
+        withSRI.length === thirdPartyCdnScripts.length
+          ? `Tous les ${thirdPartyCdnScripts.length} scripts CDN externes ont un attribut integrity.`
+          : `${withSRI.length}/${thirdPartyCdnScripts.length} scripts chargés depuis un CDN public ont un attribut integrity.`,
       recommendation:
-        withSRI.length < externalScripts.length
-          ? "Ajoutez un attribut integrity= sur tous les scripts et styles externes."
+        withSRI.length < thirdPartyCdnScripts.length
+          ? "Ajoutez integrity= et crossorigin= sur les scripts chargés depuis des CDN publics (unpkg, jsdelivr, cdnjs)."
           : undefined,
     });
   }
 
-  // Mixed content
-  const httpResources = html.match(/http:\/\/[^"'\s]+\.(js|css|png|jpg|jpeg|gif|svg|woff2?)/gi);
-  checks.push({
-    id: "mixed-content",
-    category: "owasp",
-    name: "Contenu mixte (Mixed Content)",
-    status: httpResources ? "fail" : "pass",
-    severity: httpResources ? "high" : undefined,
-    description: httpResources
-      ? `${httpResources.length} ressource(s) chargée(s) en HTTP détectée(s).`
-      : "Aucune ressource HTTP non sécurisée détectée.",
-    value: httpResources?.slice(0, 3).join(", "),
-    recommendation: httpResources
-      ? "Migrez toutes les ressources vers HTTPS."
-      : undefined,
+  // Mixed content — uniquement dans des attributs de chargement de ressources
+  const resourceAttrRe = /(?:src|href)\s*=\s*["'](http:\/\/[^"']+)["']/gi;
+  const mixedAll: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = resourceAttrRe.exec(cleanHtml)) !== null) {
+    const url = m[1];
+    // Ignorer les liens texte (rel="canonical" etc. sur des endpoints HTTP n'est pas du mixed content rendu)
+    // Vérifier uniquement les balises qui chargent effectivement une ressource
+    const tagStart = cleanHtml.lastIndexOf("<", m.index);
+    const tagSlice = cleanHtml.substring(tagStart, m.index + m[0].length + 1).toLowerCase();
+    if (/^<(?:script|link\s[^>]*rel=["'](?:stylesheet|preload|preconnect)|img|iframe|video|audio|source|embed|object)\b/.test(tagSlice)) {
+      mixedAll.push(url);
+    }
+  }
+  const mixedUnique = [...new Set(mixedAll)];
+  if (mixedUnique.length > 0) {
+    checks.push({
+      id: "mixed-content",
+      category: "owasp",
+      name: "Contenu mixte (Mixed Content)",
+      status: "fail",
+      severity: "high",
+      description: `${mixedUnique.length} ressource(s) chargée(s) en HTTP détectée(s).`,
+      value: mixedUnique.slice(0, 3).join(", "),
+      recommendation: "Migrez toutes les ressources vers HTTPS.",
+    });
+  } else {
+    checks.push({
+      id: "mixed-content",
+      category: "owasp",
+      name: "Contenu mixte (Mixed Content)",
+      status: "pass",
+      description: "Aucune ressource HTTP non sécurisée détectée.",
+    });
+  }
+
+  return checks;
+}
+
+// =============================================================================
+// 5b. DIRECTORY LISTING & GRAPHQL INTROSPECTION
+// =============================================================================
+
+async function checkDirectoryListing(baseUrl: string, soft404: Soft404Detector): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const paths = [
+    "/uploads/", "/files/", "/assets/", "/images/",
+    "/backup/", "/backups/", "/logs/", "/log/",
+    "/old/", "/tmp/", "/temp/", "/static/",
+  ];
+
+  const listingRegex = /<title>\s*Index of \/[^<]*<\/title>|<h1>\s*Index of \/[^<]*<\/h1>/i;
+
+  const results = await Promise.all(
+    paths.map(async (path) => {
+      const res = await safeFetch(`${origin}${path}`, { method: "GET", timeout: 3000, redirect: "manual" });
+      if (!res || res.status !== 200) return null;
+      const body = await res.text().catch(() => "");
+      if (soft404.isSoft404(body, res.status)) return null;
+      if (listingRegex.test(body)) return path;
+      return null;
+    })
+  );
+
+  const exposed = results.filter((p): p is string => p !== null);
+
+  if (exposed.length > 0) {
+    checks.push({
+      id: "dir-listing",
+      category: "owasp",
+      name: "Listage de répertoires activé",
+      status: "fail",
+      severity: "high",
+      description: `Listage de répertoires accessible sur ${exposed.length} chemin(s). Les attaquants peuvent énumérer les fichiers.`,
+      value: exposed.join(", "),
+      recommendation: `Désactivez l'autoindex :\n\n# Apache (.htaccess)\nOptions -Indexes\n\n# Nginx\nautoindex off;`,
+    });
+  }
+
+  return checks;
+}
+
+async function checkGraphQLIntrospection(baseUrl: string): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const origin = new URL(baseUrl).origin;
+  const paths = ["/graphql", "/api/graphql", "/query", "/v1/graphql", "/graphiql"];
+  const introspectionQuery = JSON.stringify({
+    query: "{__schema{types{name}}}",
   });
+
+  for (const path of paths) {
+    const res = await safeFetch(`${origin}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" } as Record<string, string>,
+      body: introspectionQuery,
+      timeout: 4000,
+    });
+    if (!res?.ok) continue;
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) continue;
+    const body = await res.text().catch(() => "");
+    try {
+      const parsed = JSON.parse(body);
+      const types = parsed?.data?.__schema?.types;
+      if (Array.isArray(types) && types.length > 0) {
+        checks.push({
+          id: "graphql-introspection",
+          category: "owasp",
+          name: "GraphQL : introspection activée",
+          status: "warn",
+          severity: "medium",
+          description: `L'endpoint GraphQL ${path} permet l'introspection (${types.length} types exposés). Un attaquant peut cartographier tout le schéma.`,
+          value: `${origin}${path}`,
+          recommendation: `Désactivez l'introspection en production :\n\n// Apollo Server\nnew ApolloServer({ introspection: false })\n\n// graphql-yoga\ncreateYoga({ graphiql: false, maskedErrors: true })\n\n// Hasura : désactivez via console ou HASURA_GRAPHQL_ENABLE_DISABLED_APIS`,
+        });
+        return checks; // One finding is enough
+      }
+    } catch {
+      // Not JSON
+    }
+  }
 
   return checks;
 }
@@ -749,9 +1278,8 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
       id: "security-txt",
       category: "infra",
       name: "security.txt (RFC 9116)",
-      status: "warn",
-      severity: "low",
-      description: "Aucun fichier security.txt trouvé. Ce fichier permet aux chercheurs en sécurité de signaler des vulnérabilités.",
+      status: "info",
+      description: "Aucun fichier security.txt trouvé. Utile pour permettre aux chercheurs de signaler des vulnérabilités, mais optionnel.",
       recommendation: "Créez /.well-known/security.txt avec un Contact: et un Expires: (voir securitytxt.org).",
     });
   }
@@ -789,36 +1317,45 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
       : undefined,
   });
 
-  // DNS check via DNS-over-HTTPS
+  // DNS checks — only relevant if the domain is used for sending email (MX present)
   try {
-    const dnsRes = await safeFetch(
-      `https://dns.google/resolve?name=${hostname}&type=TXT`,
-      { timeout: 5000 }
-    );
-    if (dnsRes?.ok) {
-      const dnsData = await dnsRes.json();
-      const txtRecords: string[] = (dnsData.Answer || [])
-        .filter((r: { type: number }) => r.type === 16)
-        .map((r: { data: string }) => r.data);
+    const [mxRes, txtRes] = await Promise.all([
+      safeFetch(`https://dns.google/resolve?name=${hostname}&type=MX`, { timeout: 5000 }),
+      safeFetch(`https://dns.google/resolve?name=${hostname}&type=TXT`, { timeout: 5000 }),
+    ]);
 
-      // SPF
-      const spf = txtRecords.find((r) => r.includes("v=spf1"));
+    const mxRecords: string[] = mxRes?.ok
+      ? ((await mxRes.json()).Answer || [])
+          .filter((r: { type: number }) => r.type === 15)
+          .map((r: { data: string }) => r.data)
+      : [];
+    const hasEmail = mxRecords.length > 0;
+
+    const txtRecords: string[] = txtRes?.ok
+      ? ((await txtRes.json()).Answer || [])
+          .filter((r: { type: number }) => r.type === 16)
+          .map((r: { data: string }) => r.data)
+      : [];
+
+    const spf = txtRecords.find((r) => r.includes("v=spf1"));
+
+    if (hasEmail) {
+      // Domain sends email → SPF/DMARC matter
       checks.push({
         id: "dns-spf",
         category: "infra",
         name: "SPF (Sender Policy Framework)",
         status: spf ? "pass" : "warn",
-        severity: !spf ? "medium" : undefined,
+        severity: !spf ? "low" : undefined,
         description: spf
-          ? "Enregistrement SPF configuré. Protège contre l'usurpation d'email."
-          : "Aucun enregistrement SPF trouvé. Les emails du domaine peuvent être usurpés.",
+          ? "Enregistrement SPF configuré."
+          : "Aucun SPF trouvé alors que le domaine envoie des emails (MX présents). Risque d'usurpation.",
         value: spf?.substring(0, 200),
         recommendation: !spf
           ? "Ajoutez un enregistrement TXT SPF : v=spf1 include:votre_provider -all"
           : undefined,
       });
 
-      // DMARC
       const dmarcRes = await safeFetch(
         `https://dns.google/resolve?name=_dmarc.${hostname}&type=TXT`,
         { timeout: 5000 }
@@ -837,27 +1374,23 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
         category: "infra",
         name: "DMARC (Email Authentication)",
         status: dmarc ? "pass" : "warn",
-        severity: !dmarc ? "medium" : undefined,
+        severity: !dmarc ? "low" : undefined,
         description: dmarc
-          ? "DMARC configuré. Les emails non authentifiés sont gérés selon votre politique."
-          : "Aucun enregistrement DMARC trouvé. Vulnérable à l'usurpation d'email.",
+          ? "DMARC configuré."
+          : "Aucun DMARC trouvé alors que le domaine envoie des emails.",
         value: dmarc?.substring(0, 200) || undefined,
         recommendation: !dmarc
-          ? "Ajoutez un enregistrement TXT _dmarc : v=DMARC1; p=quarantine; rua=mailto:dmarc@votredomaine.com"
+          ? "Ajoutez un TXT _dmarc : v=DMARC1; p=quarantine; rua=mailto:dmarc@votredomaine.com"
           : undefined,
       });
-
-      // DKIM hint (can't fully verify without knowing selector)
-      const hasDKIM = txtRecords.some((r) => r.includes("DKIM"));
+    } else {
+      // Domaine sans email → info seulement
       checks.push({
-        id: "dns-dkim",
+        id: "dns-email",
         category: "infra",
-        name: "DKIM (Email Signing)",
+        name: "Authentification email (SPF/DMARC)",
         status: "info",
-        description: hasDKIM
-          ? "Références DKIM trouvées dans les enregistrements DNS."
-          : "Impossible de vérifier DKIM sans connaître le sélecteur. Vérifiez dans votre configuration email.",
-        recommendation: "Configurez DKIM via votre fournisseur email pour signer les messages sortants.",
+        description: "Aucun enregistrement MX détecté — le domaine n'envoie pas d'emails. SPF/DMARC non applicables.",
       });
     }
   } catch {
@@ -899,38 +1432,18 @@ async function checkInfrastructure(baseUrl: string, headers: Headers): Promise<A
 
 async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
-  const lower = html.toLowerCase();
   const origin = new URL(baseUrl).origin;
 
-  // Privacy policy detection — check text, links and href attributes
-  let hasPrivacyLink =
-    lower.includes("privacy") ||
-    lower.includes("vie privée") ||
-    lower.includes("confidentialité") ||
-    lower.includes("confidentialite") ||
-    lower.includes("données personnelles") ||
-    lower.includes("donnees personnelles") ||
-    lower.includes("protection des données") ||
-    lower.includes("protection des donnees") ||
-    lower.includes("privacybeleid") ||
-    lower.includes("gegevensbescherming") ||
-    lower.includes("datenschutz") ||
-    lower.includes("rgpd") ||
-    lower.includes("gdpr") ||
-    /href=['"][^'"]*privac/i.test(html) ||
-    /href=['"][^'"]*confidentialite/i.test(html) ||
-    /href=['"][^'"]*donnees-personnelles/i.test(html);
+  // Privacy policy — require an actual <a href="…"> pointing to a privacy-like URL
+  // (text-only match over-counts: a blog post discussing privacy would false-pass)
+  const privacyHrefRegex =
+    /<a\b[^>]*\bhref\s*=\s*["'][^"']*\/(?:privacy(?:-policy)?|politique-de-confidentialite|politique-confidentialite|confidentialite|donnees-personnelles|privacybeleid|gegevensbescherming|datenschutz|datenschutzerklaerung|gdpr|rgpd)(?:[/?#"']|\.[a-z]+["'])/i;
+  let hasPrivacyLink = privacyHrefRegex.test(html);
 
-  // Legal notice — check text and href attributes
-  let hasLegal =
-    lower.includes("mentions légales") ||
-    lower.includes("mentions legales") ||
-    lower.includes("legal notice") ||
-    lower.includes("legal-notice") ||
-    lower.includes("impressum") ||
-    lower.includes("wettelijke vermeldingen") ||
-    /href=['"][^'"]*mentions-legales/i.test(html) ||
-    /href=['"][^'"]*legal/i.test(html);
+  // Legal notice — require an actual <a href="…">
+  const legalHrefRegex =
+    /<a\b[^>]*\bhref\s*=\s*["'][^"']*\/(?:mentions-legales|mentions_legales|legal(?:-notice)?|impressum|wettelijke-vermeldingen)(?:[/?#"']|\.[a-z]+["'])/i;
+  let hasLegal = legalHrefRegex.test(html);
 
   // Fallback: probe common page URLs when not found in HTML
   // (handles client-side rendered links not visible in raw HTML)
@@ -966,17 +1479,37 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
     );
   }
 
+  // Tracking scripts (URL-based, low FP) — computed here so it gates the privacy severity
+  const hasTracking =
+    /googletagmanager\.com\/gtm\.js/i.test(html) ||
+    /googletagmanager\.com\/gtag\/js/i.test(html) ||
+    /google-analytics\.com/i.test(html) ||
+    /\bgtag\s*\(/i.test(html) ||
+    /connect\.facebook\.net/i.test(html) ||
+    /\bfbq\s*\(/i.test(html) ||
+    /static\.hotjar\.com|script\.hotjar\.com/i.test(html) ||
+    /js\.hs-scripts\.com/i.test(html);
+
+  // Privacy policy severity depends on whether data is actually collected
+  // (tracking scripts or forms). A static brochure site without collection has no RGPD obligation.
+  const collectsPersonalData = (() => {
+    const inputs = html.match(/<input\b[^>]*>/gi) || [];
+    return inputs.some((i) => /type\s*=\s*["']email["']|name\s*=\s*["'](?:email|phone|tel|nom|name)["']/i.test(i));
+  })();
+  const privacyRequired = hasTracking || collectsPersonalData;
   checks.push({
     id: "rgpd-privacy",
     category: "rgpd",
     name: "Politique de confidentialité",
-    status: hasPrivacyLink ? "pass" : "fail",
-    severity: !hasPrivacyLink ? "high" : undefined,
+    status: hasPrivacyLink ? "pass" : privacyRequired ? "warn" : "info",
+    severity: !hasPrivacyLink && privacyRequired ? "medium" : undefined,
     description: hasPrivacyLink
       ? "Un lien vers une politique de confidentialité a été détecté."
-      : "Aucune politique de confidentialité détectée. Obligation RGPD pour tout site collectant des données.",
-    recommendation: !hasPrivacyLink
-      ? "Ajoutez une page de politique de confidentialité accessible depuis toutes les pages."
+      : privacyRequired
+      ? "Aucun lien vers une politique de confidentialité dans le HTML initial, alors que des trackers ou des formulaires collectent des données."
+      : "Aucune politique de confidentialité détectée. Recommandée mais non obligatoire pour un site statique sans collecte.",
+    recommendation: !hasPrivacyLink && privacyRequired
+      ? "Ajoutez un lien vers votre politique de confidentialité dans le footer de toutes les pages."
       : undefined,
   });
 
@@ -994,32 +1527,15 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
       : undefined,
   });
 
-  // Cookie consent banner
+  // Cookie consent banner — detected via actual script URLs or DOM id/class markers
+  // (not just keyword mentions, which false-match in blog posts)
   const hasCookieBanner =
-    lower.includes("cookie-consent") ||
-    lower.includes("cookie-banner") ||
-    lower.includes("cookieconsent") ||
-    lower.includes("cookie_consent") ||
-    lower.includes("tarteaucitron") ||
-    lower.includes("onetrust") ||
-    lower.includes("cookiebot") ||
-    lower.includes("axeptio") ||
-    lower.includes("didomi") ||
-    lower.includes("consent-manager") ||
-    lower.includes("cookie-notice") ||
-    lower.includes("cc-window") ||
-    lower.includes("gdpr-cookie");
-
-  // Check if tracking cookies are set without consent
-  const hasTracking =
-    /googletagmanager\.com\/gtm\.js/i.test(html) ||
-    /googletagmanager\.com\/gtag\/js/i.test(html) ||
-    /google-analytics\.com/i.test(html) ||
-    /gtag\s*\(/i.test(html) ||
-    /connect\.facebook\.net/i.test(html) ||
-    /fbq\s*\(/i.test(html) ||
-    /static\.hotjar\.com|script\.hotjar\.com/i.test(html) ||
-    /js\.hs-scripts\.com/i.test(html);
+    // Known CMP vendor scripts
+    /<script\b[^>]*\bsrc\s*=\s*["'][^"']*(?:cookiebot\.com\/uc\.js|tarteaucitron[^"']*\.js|axeptio_sdk|sdk\.privacy-center\.org|didomi\.io\/loader|onetrust\.com\/(?:scripttemplates|consent)|klaro[^"']*\.js|consentmanager\.net\/delivery|cookie-script\.com)/i.test(html) ||
+    // Inline CMP loaders
+    /\b(?:OneTrustActiveGroups|OnetrustActiveGroups|Cookiebot|tarteaucitron|window\.axeptioSettings|didomiOnReady|klaroConfig|_paq\.push)\b/.test(html) ||
+    // DOM-level banners (id/class)
+    /<[^>]+\b(?:id|class)\s*=\s*["'](?:[^"']*\s)?(?:cookie-consent|cookie-banner|cookie-notice|cookieconsent|cc-window|onetrust-banner-sdk|ot-sdk-row|gdpr-cookie|consent-manager-wrapper|didomi-host|axeptio_widget)\b[^"']*["']/i.test(html);
 
   if (hasTracking && !hasCookieBanner) {
     checks.push({
@@ -1049,18 +1565,18 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
     });
   }
 
-  // Third-party trackers inventory
+  // Third-party trackers inventory (URL-based, low FP)
   const trackers: string[] = [];
-  if (lower.includes("google-analytics") || lower.includes("gtag")) trackers.push("Google Analytics");
-  if (lower.includes("googletagmanager") || lower.includes("gtm.js")) trackers.push("Google Tag Manager");
-  if (lower.includes("fbq(") || lower.includes("facebook.net")) trackers.push("Facebook/Meta Pixel");
-  if (lower.includes("hotjar")) trackers.push("Hotjar");
-  if (lower.includes("hubspot")) trackers.push("HubSpot");
-  if (lower.includes("linkedin.com/px") || lower.includes("snap.licdn")) trackers.push("LinkedIn Insight");
-  if (lower.includes("tiktok")) trackers.push("TikTok Pixel");
-  if (lower.includes("pinterest")) trackers.push("Pinterest Tag");
-  if (lower.includes("clarity.ms")) trackers.push("Microsoft Clarity");
-  if (lower.includes("doubleclick") || lower.includes("googlesyndication")) trackers.push("Google Ads");
+  if (/google-analytics\.com|\bgtag\s*\(/i.test(html)) trackers.push("Google Analytics");
+  if (/googletagmanager\.com\/gtm\.js|\bgtm\.start\b/i.test(html)) trackers.push("Google Tag Manager");
+  if (/connect\.facebook\.net|\bfbq\s*\(/i.test(html)) trackers.push("Facebook/Meta Pixel");
+  if (/static\.hotjar\.com|script\.hotjar\.com/i.test(html)) trackers.push("Hotjar");
+  if (/js\.hs-scripts\.com|js\.hs-analytics\.net/i.test(html)) trackers.push("HubSpot");
+  if (/snap\.licdn\.com|linkedin\.com\/px\/|_linkedin_data_partner_id/i.test(html)) trackers.push("LinkedIn Insight");
+  if (/analytics\.tiktok\.com/i.test(html)) trackers.push("TikTok Pixel");
+  if (/s\.pinimg\.com|pintrk\s*\(/i.test(html)) trackers.push("Pinterest Tag");
+  if (/clarity\.ms/i.test(html)) trackers.push("Microsoft Clarity");
+  if (/doubleclick\.net|googlesyndication\.com/i.test(html)) trackers.push("Google Ads");
 
   if (trackers.length > 0) {
     checks.push({
@@ -1074,22 +1590,9 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
     });
   }
 
-  // Form data collection
-  const forms = html.match(/<form[^>]*>/gi) || [];
-  const inputs = html.match(/<input[^>]*>/gi) || [];
-  const collectsPersonalData = inputs.some((i) => {
-    const l = i.toLowerCase();
-    return (
-      l.includes('type="email"') ||
-      l.includes('name="email"') ||
-      l.includes('name="phone"') ||
-      l.includes('name="tel"') ||
-      l.includes('name="name"') ||
-      l.includes('name="nom"')
-    );
-  });
-
+  // Form data collection — info only (already factored into the privacy check above)
   if (collectsPersonalData) {
+    const forms = html.match(/<form\b[^>]*>/gi) || [];
     checks.push({
       id: "rgpd-data-collection",
       category: "rgpd",
@@ -1107,95 +1610,96 @@ async function checkRGPD(html: string, baseUrl: string): Promise<AuditCheck[]> {
 // 8. INCIDENT RESPONSE & MONITORING
 // =============================================================================
 
-async function checkIncidentResponse(baseUrl: string, headers: Headers, html: string): Promise<AuditCheck[]> {
+async function checkIncidentResponse(
+  baseUrl: string,
+  headers: Headers,
+  html: string,
+  infra: InfraContext,
+  soft404: Soft404Detector
+): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
 
-  // Error page disclosure — test 404
+  // Error page disclosure — strict signature match (stack traces spécifiques, pas de mots-clés larges)
   const error404 = await safeFetch(`${origin}/this-page-should-not-exist-${Date.now()}`, {
     timeout: 5000,
   });
-  if (error404) {
+  if (error404 && error404.status >= 400) {
     const errorHtml = await error404.text().catch(() => "");
-    const lower = errorHtml.toLowerCase();
-    const leaksInfo =
-      lower.includes("stack trace") ||
-      lower.includes("traceback") ||
-      lower.includes("exception") ||
-      lower.includes("at /") ||
-      lower.includes("line ") ||
-      lower.includes("debug") ||
-      lower.includes("internal server error") ||
-      lower.includes("sql") ||
-      lower.includes("mysql") ||
-      lower.includes("postgresql") ||
-      lower.includes("mongodb");
+    // Signatures spécifiques de framework en debug mode — pas de mots-clés génériques
+    const stackTracePatterns = [
+      /Traceback \(most recent call last\)/i,
+      /\bat\s+[\w$.]+\s*\([^)]*:\d+:\d+\)/, // JS stack trace
+      /<div class="traceback"|<pre class="stack-trace"/i,
+      /Whoops, there was an error|Symfony\\Component/i,
+      /Illuminate\\[A-Za-z]+\\/, // Laravel
+      /Werkzeug Debugger|Flask-DebugToolbar/,
+      /Django Debug|DEBUG = True/,
+      /Fatal error: Uncaught [A-Z]\w*Exception/i,
+      /<b>Warning<\/b>:\s+.*?in\s+<b>.*?<\/b>\s+on line\s+<b>\d+<\/b>/i, // PHP warning
+      /You have an error in your SQL syntax|ORA-\d{5}/i,
+    ];
+    const leaksInfo = stackTracePatterns.some((p) => p.test(errorHtml));
 
-    checks.push({
-      id: "error-disclosure",
-      category: "incident",
-      name: "Divulgation d'erreur (Page 404)",
-      status: leaksInfo ? "fail" : "pass",
-      severity: leaksInfo ? "high" : undefined,
-      description: leaksInfo
-        ? "La page d'erreur expose des informations techniques (stack trace, paths, base de données)."
-        : "La page d'erreur ne divulgue pas d'informations techniques sensibles.",
-      recommendation: leaksInfo
-        ? "Configurez des pages d'erreur personnalisées qui ne révèlent aucun détail technique."
-        : undefined,
-    });
+    if (leaksInfo) {
+      checks.push({
+        id: "error-disclosure",
+        category: "incident",
+        name: "Divulgation d'erreur (Page 404)",
+        status: "fail",
+        severity: "high",
+        description: "La page d'erreur expose des traces techniques (stack trace, erreurs SQL, chemins internes).",
+        recommendation: "Configurez des pages d'erreur personnalisées. Désactivez le mode debug en production.",
+      });
+    } else {
+      checks.push({
+        id: "error-disclosure",
+        category: "incident",
+        name: "Divulgation d'erreur (Page 404)",
+        status: "pass",
+        description: "La page d'erreur ne divulgue pas de traces techniques sensibles.",
+      });
+    }
   }
 
-  // Debug mode detection
+  // Debug mode detection — via response headers (canonique) + patterns très spécifiques
+  const cleanHtml = stripScriptsStylesComments(html);
   const debugIndicators = [
-    html.includes("DJANGO_SETTINGS_MODULE"),
-    html.includes("debug=true"),
-    html.includes("DEBUG = True"),
-    html.includes("display_errors"),
-    html.includes("Xdebug"),
-    html.includes("php_error"),
-    html.includes("laravel_debugbar"),
-    html.includes("__debug__"),
     headers.get("x-debug-token") !== null,
     headers.get("x-debug-token-link") !== null,
+    /<!-- Laravel Debugbar/.test(html),
+    /sf-toolbar|symfony-debug-toolbar/i.test(cleanHtml),
+    /<div[^>]+id=["']djDebug["']/i.test(cleanHtml), // Django debug toolbar
+    /Whoops\\Run/i.test(cleanHtml),
   ];
 
   const debugFound = debugIndicators.some(Boolean);
-  checks.push({
-    id: "debug-mode",
-    category: "incident",
-    name: "Mode debug",
-    status: debugFound ? "fail" : "pass",
-    severity: debugFound ? "critical" : undefined,
-    description: debugFound
-      ? "Le mode debug semble activé en production ! Risque majeur de fuite d'information."
-      : "Aucun indicateur de mode debug détecté.",
-    recommendation: debugFound
-      ? "Désactivez IMMÉDIATEMENT le mode debug en production (APP_DEBUG=false, DEBUG=False)."
-      : undefined,
-  });
+  if (debugFound) {
+    checks.push({
+      id: "debug-mode",
+      category: "incident",
+      name: "Mode debug",
+      status: "fail",
+      severity: "critical",
+      description: "Des indicateurs de barre de debug ou d'en-têtes de debug sont présents en production.",
+      recommendation: "Désactivez IMMÉDIATEMENT le mode debug (APP_DEBUG=false, DEBUG=False, debugbar disabled).",
+    });
+  } else {
+    checks.push({
+      id: "debug-mode",
+      category: "incident",
+      name: "Mode debug",
+      status: "pass",
+      description: "Aucun indicateur de mode debug détecté.",
+    });
+  }
 
-  // Backup files exposure — with soft 404 detection
+  // Backup files exposure — uses shared soft404 detector
   const backupPaths = [
     "/backup.zip", "/backup.tar.gz", "/backup.sql.gz",
     "/db.sql", "/database.sql", "/dump.sql",
     "/site.zip", "/www.zip", "/public.zip",
   ];
-
-  // Build soft 404 fingerprint for this function
-  let backupSoft404Fingerprint = "";
-  let backupSoft404Length = 0;
-  try {
-    const probe = await safeFetch(
-      `${origin}/__soft404_probe_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      { method: "GET", redirect: "manual", timeout: 4000 }
-    );
-    if (probe && probe.status === 200) {
-      const body = await probe.text();
-      backupSoft404Length = body.length;
-      backupSoft404Fingerprint = body.substring(0, 500);
-    }
-  } catch {}
 
   const exposedBackups: string[] = [];
   await Promise.all(
@@ -1204,20 +1708,18 @@ async function checkIncidentResponse(baseUrl: string, headers: Headers, html: st
       if (!res?.ok) return;
 
       const contentType = res.headers.get("content-type") || "";
-      // Backup files should NEVER be HTML — if HTML, it's a soft 404 / catch-all
       if (contentType.includes("text/html") || contentType.includes("application/xhtml")) return;
 
-      // Check content-type matches expected binary/sql types
       const isBinary = contentType.includes("application/") || contentType.includes("octet-stream");
       const isSql = contentType.includes("text/plain") || contentType.includes("text/sql");
       if (!isBinary && !isSql) return;
 
-      // Soft 404 check: compare body against fingerprint
-      if (backupSoft404Fingerprint) {
-        const body = await res.text().catch(() => "");
-        const lengthSimilar = Math.abs(body.length - backupSoft404Length) / Math.max(backupSoft404Length, 1) < 0.05;
-        const contentSimilar = body.substring(0, 500) === backupSoft404Fingerprint;
-        if (lengthSimilar && contentSimilar) return;
+      const body = await res.text().catch(() => "");
+      if (soft404.isSoft404(body, res.status)) return;
+
+      // Pour .sql : vérifier signature SQL (évite les faux positifs sur texte plain générique)
+      if (path.endsWith(".sql") || path.endsWith(".sql.gz")) {
+        if (!/^(--|\/\*!)|CREATE TABLE|INSERT INTO|mysqldump/im.test(body.substring(0, 5000))) return;
       }
 
       exposedBackups.push(path);
@@ -1256,43 +1758,51 @@ async function checkIncidentResponse(baseUrl: string, headers: Headers, html: st
       : undefined,
   });
 
-  // Rate limiting headers
+  // Rate limiting — info si un CDN est détecté (souvent géré en amont sans header public)
   const hasRateLimit =
     headers.get("x-ratelimit-limit") !== null ||
     headers.get("x-rate-limit-limit") !== null ||
     headers.get("retry-after") !== null ||
     headers.get("ratelimit-limit") !== null;
 
-  checks.push({
-    id: "rate-limit",
-    category: "incident",
-    name: "Limitation de débit (Rate Limiting)",
-    status: hasRateLimit ? "pass" : "warn",
-    severity: !hasRateLimit ? "medium" : undefined,
-    description: hasRateLimit
-      ? "Des en-têtes de rate limiting sont configurés."
-      : "Aucun rate limiting détecté. Le site est vulnérable aux attaques par force brute et DDoS.",
-    recommendation: !hasRateLimit
-      ? "Implémentez un rate limiting (nginx limit_req, Cloudflare, ou au niveau applicatif)."
-      : undefined,
-  });
+  if (hasRateLimit) {
+    checks.push({
+      id: "rate-limit",
+      category: "incident",
+      name: "Limitation de débit (Rate Limiting)",
+      status: "pass",
+      description: "Des en-têtes de rate limiting sont configurés.",
+    });
+  } else {
+    checks.push({
+      id: "rate-limit",
+      category: "incident",
+      name: "Limitation de débit (Rate Limiting)",
+      status: "info",
+      description: infra.isManagedHost
+        ? `Aucun header de rate limiting en réponse. Votre hébergeur/CDN (${infra.cdn}) peut en appliquer en amont sans l'exposer.`
+        : "Aucun en-tête de rate limiting détecté. Utile contre brute-force et DDoS applicatif.",
+      recommendation: infra.isManagedHost
+        ? undefined
+        : "Implémentez un rate limiting (nginx limit_req, Cloudflare, ou au niveau applicatif).",
+    });
+  }
 
-  // Cache headers
+  // Cache headers — info uniquement (impact perf, pas sécurité)
   const cacheControl = headers.get("cache-control");
   const etag = headers.get("etag");
   checks.push({
     id: "cache-headers",
     category: "incident",
     name: "En-têtes de cache",
-    status: cacheControl || etag ? "pass" : "warn",
-    severity: !cacheControl && !etag ? "low" : undefined,
+    status: cacheControl || etag ? "pass" : "info",
     description:
       cacheControl || etag
         ? `Cache configuré : ${cacheControl || ""} ${etag ? "ETag présent" : ""}`.trim()
-        : "Aucun en-tête de cache détecté. Impact sur la performance et la disponibilité.",
+        : "Aucun en-tête de cache. Impact perf uniquement, pas sécurité.",
     value: cacheControl || undefined,
     recommendation: !cacheControl
-      ? "Configurez Cache-Control pour optimiser les performances et réduire la charge serveur."
+      ? "Configurez Cache-Control pour optimiser les performances (bonne pratique, non sécuritaire)."
       : undefined,
   });
 
@@ -1306,95 +1816,103 @@ async function checkIncidentResponse(baseUrl: string, headers: Headers, html: st
 function checkXSSVectors(html: string): AuditCheck[] {
   const checks: AuditCheck[] = [];
 
-  // Inline event handlers
-  const inlineHandlers = html.match(/\son\w+\s*=/gi) || [];
-  if (inlineHandlers.length > 5) {
+  // Strip scripts/styles/comments to avoid matching inside code/docs
+  const cleanHtml = stripScriptsStylesComments(html);
+  // Extract inline script bodies for eval/document.write/innerHTML detection
+  const scriptBodies = extractScriptContent(html);
+
+  // Inline event handlers — comptés uniquement dans le HTML rendu (pas dans scripts/commentaires)
+  const inlineHandlers = cleanHtml.match(/\s(on(?:click|change|submit|load|error|mouseover|focus|blur|input|keyup|keydown|keypress))\s*=\s*["']/gi) || [];
+  if (inlineHandlers.length > 15) {
     checks.push({
       id: "inline-handlers",
       category: "xss",
       name: "Event handlers inline",
-      status: "warn",
-      severity: "medium",
-      description: `${inlineHandlers.length} gestionnaires d'événements inline détectés (onclick, onload...).`,
-      recommendation: "Utilisez addEventListener() au lieu des attributs inline pour réduire la surface XSS.",
+      status: "info",
+      description: `${inlineHandlers.length} gestionnaires d'événements inline détectés (onclick, onload...). Acceptable mais addEventListener() est préférable.`,
+      recommendation: "Préférez addEventListener() pour faciliter une future CSP strict.",
     });
   }
 
-  // document.write usage
-  const docWrite = html.match(/document\.write\s*\(/g) || [];
+  // document.write — uniquement dans les scripts inline
+  const docWrite = scriptBodies.match(/\bdocument\.write(?:ln)?\s*\(/g) || [];
   if (docWrite.length > 0) {
     checks.push({
       id: "document-write",
       category: "xss",
       name: "Utilisation de document.write()",
-      status: "warn",
-      severity: "medium",
-      description: `${docWrite.length} appel(s) à document.write() détecté(s). Vecteur XSS potentiel.`,
-      recommendation: "Remplacez document.write() par des manipulations DOM (createElement, innerHTML contrôlé).",
+      status: "info",
+      description: `${docWrite.length} appel(s) à document.write() détecté(s) dans des scripts inline. Pattern souvent présent via GTM/ads tiers, pas forcément problématique.`,
+      recommendation: "Remplacez document.write() par createElement/appendChild dans votre code propre.",
     });
   }
 
-  // innerHTML assignments
-  const innerHTML = html.match(/\.innerHTML\s*=/g) || [];
-  if (innerHTML.length > 3) {
+  // innerHTML — info uniquement (usage légitime omniprésent dans les SPAs)
+  const innerHTML = scriptBodies.match(/\.innerHTML\s*=/g) || [];
+  if (innerHTML.length > 10) {
     checks.push({
       id: "innerhtml",
       category: "xss",
       name: "Assignation innerHTML",
       status: "info",
-      description: `${innerHTML.length} assignation(s) innerHTML détectée(s). Assurez-vous que les données sont sanitisées.`,
-      recommendation: "Utilisez textContent au lieu de innerHTML quand possible, ou sanitisez avec DOMPurify.",
+      description: `${innerHTML.length} assignation(s) innerHTML détectée(s) dans des scripts inline. Assurez-vous que les valeurs dynamiques sont sanitisées.`,
+      recommendation: "Utilisez textContent ou DOMPurify pour le contenu utilisateur.",
     });
   }
 
-  // eval usage
-  const evalUsage = html.match(/[^a-z]eval\s*\(/gi) || [];
+  // eval — uniquement dans les scripts inline, après stripping des strings
+  const scriptNoStrings = scriptBodies
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+  const evalUsage = scriptNoStrings.match(/(?:^|[^.\w])eval\s*\(/g) || [];
   if (evalUsage.length > 0) {
     checks.push({
       id: "eval-usage",
       category: "xss",
       name: "Utilisation d'eval()",
-      status: "fail",
-      severity: "high",
-      description: `${evalUsage.length} appel(s) à eval() détecté(s). Vecteur d'injection de code majeur.`,
-      recommendation: "Supprimez tous les appels à eval(). Utilisez JSON.parse() pour les données et des alternatives sûres.",
+      status: "warn",
+      severity: "medium",
+      description: `${evalUsage.length} appel(s) à eval() détecté(s) dans les scripts inline.`,
+      recommendation: "Remplacez eval() par JSON.parse() ou des alternatives sûres.",
     });
   }
 
-  // Forms
-  const forms = html.match(/<form[^>]*>/gi) || [];
+  // Forms — détection CSRF améliorée (noms de champs, headers SameSite)
+  const forms = cleanHtml.match(/<form\b[^>]*>/gi) || [];
   const mutableForms = forms.filter((f) => {
     const methodMatch = f.match(/method\s*=\s*["']?([a-z]+)/i);
     const method = (methodMatch?.[1] || "get").toLowerCase();
     return method !== "get";
   });
   if (mutableForms.length > 0) {
-    const hasCSRFToken = html.includes("csrf") || html.includes("_token") || html.includes("authenticity_token");
+    // Recherche de tokens CSRF dans les inputs hidden ou les meta tags
+    const hasCSRFToken =
+      /<input\b[^>]*\bname\s*=\s*["'](?:_token|csrf_token|csrfmiddlewaretoken|authenticity_token|__RequestVerificationToken|_csrf)["']/i.test(html) ||
+      /<meta\b[^>]*\bname\s*=\s*["']csrf-token["']/i.test(html);
     checks.push({
       id: "csrf",
       category: "xss",
       name: "Protection CSRF",
-      status: hasCSRFToken ? "pass" : "warn",
-      severity: !hasCSRFToken ? "high" : undefined,
+      status: hasCSRFToken ? "pass" : "info",
       description: hasCSRFToken
-        ? `${mutableForms.length} formulaire(s) mutable(s) avec protection CSRF détectée.`
-        : `${mutableForms.length} formulaire(s) mutable(s) sans token CSRF apparent. Risque d'attaque Cross-Site Request Forgery.`,
+        ? `${mutableForms.length} formulaire(s) mutable(s) avec token CSRF détecté.`
+        : `${mutableForms.length} formulaire(s) mutable(s) sans token CSRF détectable dans le HTML initial. Peut être géré côté serveur (SameSite cookies, custom headers).`,
       recommendation: !hasCSRFToken
-        ? "Ajoutez un token CSRF unique à chaque formulaire et validez-le côté serveur."
+        ? "Vérifiez que CSRF est protégé (token dans header custom, SameSite=Lax/Strict, ou double submit cookie)."
         : undefined,
     });
   }
 
-  // Open redirect
-  const redirects = html.match(/href\s*=\s*["'][^"']*[?&](url|redirect|next|return|goto|redir)=/gi) || [];
+  // Open redirect — info only (presence of pattern ≠ vuln)
+  const redirects = cleanHtml.match(/\bhref\s*=\s*["'][^"']*\?[^"']*(?:\bredirect_to|\breturnUrl|\bcontinue)=/gi) || [];
   if (redirects.length > 0) {
     checks.push({
       id: "open-redirect",
       category: "xss",
       name: "Redirections ouvertes potentielles",
-      status: "warn",
-      severity: "medium",
-      description: `${redirects.length} lien(s) avec paramètres de redirection détecté(s).`,
+      status: "info",
+      description: `${redirects.length} lien(s) avec paramètres de redirection détecté(s). Vérifiez que les URLs cibles sont whitelistées côté serveur.`,
       recommendation: "Validez et whitelist toutes les URLs de redirection côté serveur.",
     });
   }
@@ -1495,17 +2013,49 @@ function detectTechnologies(headers: Headers, html: string): string[] {
 // 10. WORDPRESS-SPECIFIC SECURITY CHECKS
 // =============================================================================
 
+// Canonical CMS detection — require structural markers, not just keyword mentions
+function isCanonicalWordPress(html: string): boolean {
+  return (
+    /<link\b[^>]+\brel\s*=\s*["']https:\/\/api\.w\.org\/["']/i.test(html) ||
+    /<meta\b[^>]+\bname\s*=\s*["']generator["'][^>]*content\s*=\s*["']WordPress\b/i.test(html) ||
+    /["'][^"']*\/wp-content\/(?:themes|plugins|uploads)\//.test(html) ||
+    /["'][^"']*\/wp-includes\/(?:js|css)\//.test(html) ||
+    /wp-emoji-release\.min\.js/.test(html)
+  );
+}
+
+function isCanonicalJoomla(html: string): boolean {
+  return (
+    /<meta\b[^>]+\bname\s*=\s*["']generator["'][^>]*content\s*=\s*["']Joomla!/i.test(html) ||
+    /["'][^"']*\/media\/(?:jui|system)\/(?:js|css)\//.test(html) ||
+    /\bvar\s+Joomla\s*=|window\.Joomla\s*=/.test(html) ||
+    /joomla-script-options/.test(html)
+  );
+}
+
+function isCanonicalDrupal(html: string): boolean {
+  return (
+    /<meta\b[^>]+\bname\s*=\s*["']generator["'][^>]*content\s*=\s*["']Drupal\b/i.test(html) ||
+    /\b(?:drupalSettings|Drupal\.settings|Drupal\.behaviors)\b/.test(html) ||
+    /["'][^"']*\/sites\/(?:default|all)\/(?:files|modules|themes)\//.test(html) ||
+    /<body\b[^>]+\bclass\s*=\s*["'][^"']*\bpath-frontpage\b[^"']*\bpage-node-\d+\b/.test(html)
+  );
+}
+
+function isCanonicalPrestaShop(html: string): boolean {
+  return (
+    /<meta\b[^>]+\bname\s*=\s*["']generator["'][^>]*content\s*=\s*["']PrestaShop/i.test(html) ||
+    /\bvar\s+prestashop\s*=\s*\{|window\.prestashop\s*=/.test(html) ||
+    /["'][^"']*\/themes\/[^"']+\/assets\/cache\/theme-[0-9a-f]+\.css/.test(html)
+  );
+}
+
 async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
-  const lower = html.toLowerCase();
 
-  // Only run if WordPress is detected
-  const isWP =
-    lower.includes("wp-content") ||
-    lower.includes("wp-includes") ||
-    lower.includes("wordpress");
-  if (!isWP) return checks;
+  // Only run if WordPress is canonically detected
+  if (!isCanonicalWordPress(html)) return checks;
 
   checks.push({
     id: "wp-detected",
@@ -1516,18 +2066,17 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
   });
 
   // ── WordPress Version Exposure ──
-  const wpVersionMeta = html.match(/content="WordPress\s+([\d.]+)"/i);
-  const wpVersionGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["'][^"']*WordPress\s+([\d.]+)/i);
-  const wpVersion = wpVersionMeta?.[1] || wpVersionGen?.[1];
+  const wpVersionMeta = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']WordPress\s+([\d.]+)["']/i);
+  const wpVersion = wpVersionMeta?.[1];
 
   checks.push({
     id: "wp-version",
     category: "wordpress",
     name: "Version WordPress exposée",
-    status: wpVersion ? "fail" : "pass",
-    severity: wpVersion ? "high" : undefined,
+    status: wpVersion ? "warn" : "pass",
+    severity: wpVersion ? "low" : undefined,
     description: wpVersion
-      ? `WordPress ${wpVersion} détecté dans le code source. Les attaquants peuvent cibler les vulnérabilités connues de cette version.`
+      ? `WordPress ${wpVersion} détecté dans la balise meta generator.`
       : "La version WordPress n'est pas exposée dans le code source.",
     value: wpVersion || undefined,
     recommendation: wpVersion
@@ -1535,83 +2084,97 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
       : undefined,
   });
 
-  // ── readme.html ──
+  // ── readme.html ── (validation stricte : doit vraiment être le readme WP)
   const readmeRes = await safeFetch(`${origin}/readme.html`, { timeout: 3000 });
   if (readmeRes?.ok) {
     const readmeBody = await readmeRes.text().catch(() => "");
-    const isRealReadme = /wordpress/i.test(readmeBody) && /<html/i.test(readmeBody);
+    const contentType = readmeRes.headers.get("content-type") || "";
+    const isRealReadme =
+      contentType.includes("text/html") &&
+      /<h1[^>]*>\s*<[^>]*>?\s*WordPress/i.test(readmeBody) &&
+      /Version\s+[\d.]+/i.test(readmeBody);
     if (isRealReadme) {
       checks.push({
         id: "wp-readme",
         category: "wordpress",
         name: "readme.html accessible",
-        status: "warn",
-        severity: "medium",
-        description: "Le fichier readme.html WordPress est accessible. Il peut révéler la version installée.",
+        status: "info",
+        description: "Le fichier readme.html WordPress est accessible. Impact réel faible (la version peut aussi être inférée autrement).",
         value: `${origin}/readme.html`,
-        recommendation: `Supprimez ou bloquez l'accès :\n\n# .htaccess\n<Files readme.html>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n# Ou Nginx\nlocation = /readme.html { deny all; }`,
+        recommendation: `Bloquez l'accès si souhaité :\n\n# .htaccess\n<Files readme.html>\n  Order Allow,Deny\n  Deny from all\n</Files>`,
       });
     }
   }
 
-  // ── XML-RPC ──
+  // ── XML-RPC ── (vérifier que c'est vraiment la réponse XML-RPC)
   const xmlrpcRes = await safeFetch(`${origin}/xmlrpc.php`, { method: "POST", timeout: 3000 });
-  if (xmlrpcRes?.ok) {
+  if (xmlrpcRes) {
     const xmlrpcBody = await xmlrpcRes.text().catch(() => "");
-    if (/XML-RPC server accepts POST requests only/i.test(xmlrpcBody) || xmlrpcRes.status === 405) {
+    const contentType = xmlrpcRes.headers.get("content-type") || "";
+    const isRealXmlRpc =
+      (xmlrpcRes.status === 200 || xmlrpcRes.status === 405) &&
+      !contentType.includes("text/html") &&
+      /XML-RPC server accepts POST requests only|<methodResponse>|<methodCall>/i.test(xmlrpcBody);
+    if (isRealXmlRpc) {
       checks.push({
         id: "wp-xmlrpc",
         category: "wordpress",
         name: "XML-RPC actif",
-        status: "fail",
-        severity: "high",
-        description: "XML-RPC est accessible. Vecteur de brute-force, DDoS amplification, et pingback abuse.",
+        status: "warn",
+        severity: "medium",
+        description: "XML-RPC est accessible. Vecteur historique de brute-force et pingback abuse. Fail2ban/Cloudflare mitigent souvent ce risque.",
         value: `${origin}/xmlrpc.php`,
         recommendation: `Désactivez XML-RPC :\n\n// functions.php\nadd_filter('xmlrpc_enabled', '__return_false');\n\n# .htaccess\n<Files xmlrpc.php>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n# Ou mieux : plugin "Disable XML-RPC"`,
       });
     }
   }
 
-  // ── Author Enumeration (?author=1) ──
+  // ── Author Enumeration (?author=1) ── (seulement si la redirection expose un slug)
   const authorRes = await safeFetch(`${origin}/?author=1`, { method: "GET", redirect: "manual", timeout: 3000 });
   if (authorRes) {
     const location = authorRes.headers.get("location") || "";
+    const authorMatch = location.match(/\/author\/([^/?#]+)/i);
     const exposesAuthor =
-      (authorRes.status >= 300 && authorRes.status < 400 && /\/author\//i.test(location)) ||
-      authorRes.status === 200;
-    if (exposesAuthor) {
-      const authorName = location.match(/\/author\/([^/]+)/)?.[1] || "détecté";
+      authorRes.status >= 300 &&
+      authorRes.status < 400 &&
+      authorMatch !== null;
+    if (exposesAuthor && authorMatch) {
       checks.push({
         id: "wp-author-enum",
         category: "wordpress",
         name: "Énumération des auteurs",
         status: "warn",
-        severity: "medium",
-        description: `L'énumération des auteurs est possible (${authorName !== "détecté" ? `auteur: ${authorName}` : "redirection vers /author/"}). Les noms d'utilisateur peuvent être découverts.`,
-        value: `${origin}/?author=1 → ${location || "200 OK"}`,
-        recommendation: `Bloquez l'énumération des auteurs :\n\n# .htaccess\nRewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=([0-9]*)\nRewriteRule .* - [F]\n\n// Ou dans functions.php :\nif (!is_admin() && isset($_GET['author'])) {\n  wp_redirect(home_url(), 301);\n  exit;\n}`,
+        severity: "low",
+        description: `L'énumération des auteurs est possible (auteur: ${authorMatch[1]}).`,
+        value: `${origin}/?author=1 → ${location}`,
+        recommendation: `Bloquez l'énumération :\n\n# .htaccess\nRewriteEngine On\nRewriteCond %{QUERY_STRING} ^author=([0-9]*)\nRewriteRule .* - [F]`,
       });
     }
   }
 
-  // ── REST API Users Endpoint ──
+  // ── REST API Users Endpoint ── (validation stricte JSON + array non vide)
   const restUsersRes = await safeFetch(`${origin}/wp-json/wp/v2/users`, { timeout: 3000 });
   if (restUsersRes?.ok) {
-    const usersBody = await restUsersRes.text().catch(() => "");
-    if (/^\s*\[[\s\S]*"slug"\s*:/i.test(usersBody.substring(0, 5000))) {
+    const contentType = restUsersRes.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const usersBody = await restUsersRes.text().catch(() => "");
       try {
         const users = JSON.parse(usersBody);
-        const slugs = Array.isArray(users) ? users.map((u: { slug: string }) => u.slug).slice(0, 5) : [];
-        checks.push({
-          id: "wp-rest-users",
-          category: "wordpress",
-          name: "API REST — Utilisateurs exposés",
-          status: "fail",
-          severity: "high",
-          description: `L'API REST WordPress expose les utilisateurs publiquement.${slugs.length > 0 ? ` Utilisateurs trouvés: ${slugs.join(", ")}` : ""}`,
-          value: `${origin}/wp-json/wp/v2/users`,
-          recommendation: `Bloquez l'API REST pour les non-authentifiés :\n\n// functions.php\nadd_filter('rest_authentication_errors', function($result) {\n  if (!is_user_logged_in()) {\n    return new WP_Error('rest_forbidden', 'REST API restricted.', ['status' => 401]);\n  }\n  return $result;\n});\n\n// Ou plugin : "Disable REST API"`,
-        });
+        if (Array.isArray(users) && users.length > 0 && users.every((u) => typeof u === "object" && u && "slug" in u)) {
+          const slugs = users.map((u: { slug: string }) => u.slug).filter(Boolean).slice(0, 5);
+          if (slugs.length > 0) {
+            checks.push({
+              id: "wp-rest-users",
+              category: "wordpress",
+              name: "API REST — Utilisateurs exposés",
+              status: "warn",
+              severity: "medium",
+              description: `L'API REST WordPress expose ${slugs.length} utilisateur(s) publiquement : ${slugs.join(", ")}`,
+              value: `${origin}/wp-json/wp/v2/users`,
+              recommendation: `Bloquez /wp-json/wp/v2/users aux non-authentifiés :\n\n// functions.php\nadd_filter('rest_endpoints', function($endpoints) {\n  if (isset($endpoints['/wp/v2/users'])) unset($endpoints['/wp/v2/users']);\n  if (isset($endpoints['/wp/v2/users/(?P<id>[\\\\d]+)'])) unset($endpoints['/wp/v2/users/(?P<id>[\\\\d]+)']);\n  return $endpoints;\n});`,
+            });
+          }
+        }
       } catch {
         // Not valid JSON
       }
@@ -1635,23 +2198,30 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
     }
   }
 
-  // ── debug.log exposure ──
+  // ── debug.log exposure ── (validation stricte : signatures de log PHP réelles)
   const debugLogPaths = ["/wp-content/debug.log", "/debug.log"];
   for (const path of debugLogPaths) {
     const debugRes = await safeFetch(`${origin}${path}`, { timeout: 3000 });
     if (debugRes?.ok) {
       const debugBody = await debugRes.text().catch(() => "");
       const contentType = debugRes.headers.get("content-type") || "";
-      if (!contentType.includes("text/html") && (debugBody.includes("PHP") || debugBody.includes("Warning") || debugBody.includes("Fatal error") || debugBody.includes("Stack trace"))) {
+      // Must be text/plain AND contain real PHP error log signatures
+      const isRealLog =
+        !contentType.includes("text/html") &&
+        (
+          /\[\d{2}-[A-Z][a-z]{2}-\d{4}\s+\d{2}:\d{2}:\d{2}\s+UTC\]\s+PHP\s+(Notice|Warning|Fatal error|Parse error)/i.test(debugBody) ||
+          /PHP Stack trace:/i.test(debugBody)
+        );
+      if (isRealLog) {
         checks.push({
           id: "wp-debug-log",
           category: "wordpress",
           name: "debug.log exposé",
           status: "fail",
           severity: "critical",
-          description: `Le fichier ${path} est accessible publiquement ! Il contient des erreurs PHP, chemins serveur, et potentiellement des données sensibles.`,
+          description: `Le fichier ${path} est accessible publiquement et contient des logs PHP. Fuite de chemins serveur et potentiellement de données sensibles.`,
           value: `${origin}${path}`,
-          recommendation: `Bloquez immédiatement l'accès :\n\n# .htaccess\n<Files debug.log>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n// Désactivez le debug en production :\n// wp-config.php\ndefine('WP_DEBUG', false);\ndefine('WP_DEBUG_LOG', false);`,
+          recommendation: `Bloquez immédiatement l'accès :\n\n# .htaccess\n<Files debug.log>\n  Order Allow,Deny\n  Deny from all\n</Files>\n\n// wp-config.php\ndefine('WP_DEBUG', false);\ndefine('WP_DEBUG_LOG', false);`,
         });
         break;
       }
@@ -1687,20 +2257,19 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
     });
   }
 
-  // ── Login page protection ──
+  // ── Login page accessibility ── (info only — c'est normal que ce soit accessible)
   const loginRes = await safeFetch(`${origin}/wp-login.php`, { method: "GET", redirect: "follow", timeout: 5000 });
   if (loginRes?.ok) {
     const loginBody = await loginRes.text().catch(() => "");
-    if (/name="log"[\s\S]*name="pwd"|wp-login\.php\?action=/i.test(loginBody)) {
+    if (/<form\s[^>]*name=["']loginform["']|name="log"[^>]*>[\s\S]{0,500}name="pwd"/i.test(loginBody)) {
       checks.push({
         id: "wp-login",
         category: "wordpress",
         name: "Page de connexion WordPress",
-        status: "warn",
-        severity: "medium",
-        description: "La page wp-login.php est accessible à l'URL par défaut. Cible privilégiée pour les attaques brute-force.",
+        status: "info",
+        description: "wp-login.php est accessible à l'URL par défaut (comportement normal de WordPress). Pour réduire la surface d'attaque brute-force, un masquage d'URL et un rate-limit sont recommandés.",
         value: `${origin}/wp-login.php`,
-        recommendation: `Protégez la page de connexion :\n\n1. Déplacez l'URL : plugin "WPS Hide Login"\n2. Limitez les tentatives : plugin "Limit Login Attempts Reloaded"\n3. Ajoutez un captcha : plugin "reCaptcha by BestWebSoft"\n4. IP whitelisting :\n\n# .htaccess\n<Files wp-login.php>\n  Order Deny,Allow\n  Deny from all\n  Allow from YOUR_IP\n</Files>`,
+        recommendation: `Bonnes pratiques optionnelles :\n\n1. Masquer l'URL : plugin "WPS Hide Login"\n2. Limiter les tentatives : plugin "Limit Login Attempts Reloaded"\n3. Captcha : reCaptcha\n4. IP whitelisting via .htaccess si admin unique`,
       });
     }
   }
@@ -1799,13 +2368,14 @@ async function checkWordPress(baseUrl: string, html: string): Promise<AuditCheck
   return checks;
 }
 
-// Known latest CMS versions
-const KNOWN_LATEST_VERSIONS: Record<string, string> = {
-  WordPress: "6.7",
-  Joomla: "5.2",
-  Drupal: "11.1",
-  PrestaShop: "8.2",
-  Magento: "2.4",
+// Fallback CMS versions — used if the live lookup fails. The live values are
+// fetched at request time via preloadLatestVersions() and overwrite these.
+let KNOWN_LATEST_VERSIONS: Record<string, string> = {
+  WordPress: "6.8",
+  Joomla: "5.3",
+  Drupal: "11.2",
+  PrestaShop: "9.0",
+  Magento: "2.4.7",
   TYPO3: "13.4",
 };
 
@@ -1821,12 +2391,20 @@ function secVersionCompare(a: string, b: string): number {
   return 0;
 }
 
-// Detect CMS info for the result
-function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo | null {
-  const lower = html.toLowerCase();
+// Classifies how far behind a version is: "major" (≥1 major behind), "minor" (≥1 minor behind), "current" (same or ahead).
+// Used to calibrate severity — a slightly stale version is not "critical".
+function versionGap(current: string, latest: string): "major" | "minor" | "current" {
+  const [curMajor = 0, curMinor = 0] = current.split(".").map(Number);
+  const [latMajor = 0, latMinor = 0] = latest.split(".").map(Number);
+  if (curMajor < latMajor) return "major";
+  if (curMajor === latMajor && curMinor < latMinor) return "minor";
+  return "current";
+}
 
+// Detect CMS info for the result (uses canonical markers, not keyword includes)
+function detectCMSInfo(html: string): CMSInfo | null {
   // WordPress
-  if (lower.includes("wp-content") || lower.includes("wp-includes")) {
+  if (isCanonicalWordPress(html)) {
     const versionMeta = html.match(/content="WordPress\s+([\d.]+)"/i);
     const versionGen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["'][^"']*WordPress\s+([\d.]+)/i);
     const version = versionMeta?.[1] || versionGen?.[1] || null;
@@ -1854,7 +2432,7 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
   }
 
   // Joomla
-  if (lower.includes("joomla") || (lower.includes("/media/system/js/") && lower.includes("/templates/"))) {
+  if (isCanonicalJoomla(html)) {
     const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Joomla!\s*([\d.]*)/i);
     const version = gen?.[1] || null;
     const templateMatch = html.match(/\/templates\/([^/'"?]+)/i);
@@ -1871,7 +2449,7 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
   }
 
   // Drupal
-  if (lower.includes("drupal") || lower.includes("/sites/default/files/")) {
+  if (isCanonicalDrupal(html)) {
     const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']Drupal\s*([\d.]*)/i);
     const version = gen?.[1] || null;
     const themeMatch = html.match(/\/themes\/(?:custom\/|contrib\/)?([^/'"?]+)/i);
@@ -1888,7 +2466,7 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
   }
 
   // PrestaShop
-  if (lower.includes("prestashop")) {
+  if (isCanonicalPrestaShop(html)) {
     const gen = html.match(/<meta[^>]*name=["']generator["'][^>]*content=["']PrestaShop\s*([\d.]*)/i);
     const version = gen?.[1] || null;
     const themeMatch = html.match(/\/themes\/([^/'"?]+)/i);
@@ -1904,20 +2482,26 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
     return { name: "PrestaShop", version, isOutdated, theme, plugins };
   }
 
-  // Shopify
-  if (lower.includes("shopify") || lower.includes("cdn.shopify.com")) {
+  // Shopify — require canonical markers
+  if (/cdn\.shopify\.com|Shopify\.shop\s*=|Shopify\.theme\s*=|window\.Shopify\s*=/.test(html)) {
     const themeMatch = html.match(/Shopify\.theme\s*=\s*\{[^}]*"name"\s*:\s*"([^"]+)"/i);
     const theme = themeMatch ? { name: themeMatch[1] } : null;
     return { name: "Shopify", version: null, isOutdated: null, theme, plugins: [] };
   }
 
-  // Wix / Squarespace / Webflow
-  if (lower.includes("wix.com")) return { name: "Wix", version: null, isOutdated: null, theme: null, plugins: [] };
-  if (lower.includes("squarespace")) return { name: "Squarespace", version: null, isOutdated: null, theme: null, plugins: [] };
-  if (lower.includes("webflow")) return { name: "Webflow", version: null, isOutdated: null, theme: null, plugins: [] };
+  // Wix / Squarespace / Webflow — canonical markers
+  if (/<meta[^>]+name=["']generator["'][^>]*content=["']Wix\.com|static\.wixstatic\.com|_wixCssModules/i.test(html)) {
+    return { name: "Wix", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
+  if (/static\d?\.squarespace\.com|<!--\s*This is Squarespace\./i.test(html)) {
+    return { name: "Squarespace", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
+  if (/<html[^>]+\bdata-wf-(?:site|page)=|assets\.website-files\.com/.test(html)) {
+    return { name: "Webflow", version: null, isOutdated: null, theme: null, plugins: [] };
+  }
 
-  // Magento
-  if (lower.includes("magento") || lower.includes("mage-") || lower.includes("/static/frontend/")) {
+  // Magento — require canonical markers
+  if (/<meta[^>]+name=["']generator["'][^>]*content=["']Magento|\bMage\.Cookies\b|require\.config.*?mage\/|Magento_\w+/i.test(html)) {
     const v = html.match(/Magento\/([\d.]+)/i);
     const version = v?.[1] || null;
     const isOutdated = version ? secVersionCompare(version, KNOWN_LATEST_VERSIONS.Magento) < 0 : null;
@@ -1934,10 +2518,8 @@ function detectCMSInfo(html: string, headers: Headers, baseUrl: string): CMSInfo
 async function checkJoomla(baseUrl: string, html: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
-  const lower = html.toLowerCase();
 
-  const isJoomla = lower.includes("joomla") || (lower.includes("/media/system/js/") && lower.includes("/templates/"));
-  if (!isJoomla) return checks;
+  if (!isCanonicalJoomla(html)) return checks;
 
   checks.push({
     id: "joomla-detected",
@@ -1961,15 +2543,16 @@ async function checkJoomla(baseUrl: string, html: string): Promise<AuditCheck[]>
       recommendation: "Supprimez la balise generator dans les paramètres globaux de Joomla ou via un plugin de sécurité.",
     });
 
-    if (secVersionCompare(joomlaGen[1], KNOWN_LATEST_VERSIONS.Joomla) < 0) {
+    const joomlaGap = versionGap(joomlaGen[1], KNOWN_LATEST_VERSIONS.Joomla);
+    if (joomlaGap !== "current") {
       checks.push({
         id: "joomla-outdated",
         category: "cms",
-        name: "Joomla obsolète",
-        status: "fail",
-        severity: "critical",
-        description: `Joomla ${joomlaGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.Joomla}. Les anciennes versions contiennent des vulnérabilités connues.`,
-        recommendation: "Mettez à jour Joomla vers la dernière version immédiatement.",
+        name: `Joomla ${joomlaGap === "major" ? "majeure obsolète" : "légèrement obsolète"}`,
+        status: joomlaGap === "major" ? "fail" : "warn",
+        severity: joomlaGap === "major" ? "high" : "low",
+        description: `Joomla ${joomlaGen[1]} — dernière version connue : ${KNOWN_LATEST_VERSIONS.Joomla}.`,
+        recommendation: "Mettez à jour Joomla vers la dernière version.",
       });
     }
   }
@@ -2024,10 +2607,8 @@ async function checkJoomla(baseUrl: string, html: string): Promise<AuditCheck[]>
 async function checkDrupal(baseUrl: string, html: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
-  const lower = html.toLowerCase();
 
-  const isDrupal = lower.includes("drupal") || lower.includes("/sites/default/files/");
-  if (!isDrupal) return checks;
+  if (!isCanonicalDrupal(html)) return checks;
 
   checks.push({
     id: "drupal-detected",
@@ -2051,15 +2632,16 @@ async function checkDrupal(baseUrl: string, html: string): Promise<AuditCheck[]>
       recommendation: "Supprimez la balise generator via le module de sécurité ou dans le template.",
     });
 
-    if (secVersionCompare(drupalGen[1], KNOWN_LATEST_VERSIONS.Drupal) < 0) {
+    const drupalGap = versionGap(drupalGen[1], KNOWN_LATEST_VERSIONS.Drupal);
+    if (drupalGap !== "current") {
       checks.push({
         id: "drupal-outdated",
         category: "cms",
-        name: "Drupal obsolète",
-        status: "fail",
-        severity: "critical",
-        description: `Drupal ${drupalGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.Drupal}.`,
-        recommendation: "Mettez à jour Drupal vers la dernière version. Les anciennes versions sont vulnérables (Drupalgeddon, etc.).",
+        name: `Drupal ${drupalGap === "major" ? "majeure obsolète" : "légèrement obsolète"}`,
+        status: drupalGap === "major" ? "fail" : "warn",
+        severity: drupalGap === "major" ? "high" : "low",
+        description: `Drupal ${drupalGen[1]} — dernière version connue : ${KNOWN_LATEST_VERSIONS.Drupal}.`,
+        recommendation: "Mettez à jour Drupal vers la dernière version. Les branches non-LTS sans correctifs sont vulnérables (Drupalgeddon…).",
       });
     }
   }
@@ -2110,9 +2692,8 @@ async function checkDrupal(baseUrl: string, html: string): Promise<AuditCheck[]>
 async function checkPrestaShop(baseUrl: string, html: string): Promise<AuditCheck[]> {
   const checks: AuditCheck[] = [];
   const origin = new URL(baseUrl).origin;
-  const lower = html.toLowerCase();
 
-  if (!lower.includes("prestashop")) return checks;
+  if (!isCanonicalPrestaShop(html)) return checks;
 
   checks.push({
     id: "prestashop-detected",
@@ -2136,14 +2717,15 @@ async function checkPrestaShop(baseUrl: string, html: string): Promise<AuditChec
       recommendation: "Masquez la balise generator dans les paramètres PrestaShop ou via le template.",
     });
 
-    if (secVersionCompare(psGen[1], KNOWN_LATEST_VERSIONS.PrestaShop) < 0) {
+    const psGap = versionGap(psGen[1], KNOWN_LATEST_VERSIONS.PrestaShop);
+    if (psGap !== "current") {
       checks.push({
         id: "prestashop-outdated",
         category: "cms",
-        name: "PrestaShop obsolète",
-        status: "fail",
-        severity: "critical",
-        description: `PrestaShop ${psGen[1]} est obsolète. La dernière version est ${KNOWN_LATEST_VERSIONS.PrestaShop}.`,
+        name: `PrestaShop ${psGap === "major" ? "majeure obsolète" : "légèrement obsolète"}`,
+        status: psGap === "major" ? "fail" : "warn",
+        severity: psGap === "major" ? "high" : "low",
+        description: `PrestaShop ${psGen[1]} — dernière version connue : ${KNOWN_LATEST_VERSIONS.PrestaShop}.`,
         recommendation: "Mettez à jour PrestaShop vers la dernière version.",
       });
     }
@@ -2195,25 +2777,41 @@ function checkCMSVersion(cmsInfo: CMSInfo | null): AuditCheck[] {
     value: cmsInfo.version || "Version inconnue",
   });
 
-  // Outdated check
-  if (cmsInfo.isOutdated === true) {
-    checks.push({
-      id: "cms-outdated",
-      category: "cms",
-      name: `${cmsInfo.name} n'est pas à jour`,
-      status: "fail",
-      severity: "critical",
-      description: `${cmsInfo.name} ${cmsInfo.version} est obsolète (dernière : ${KNOWN_LATEST_VERSIONS[cmsInfo.name] || "inconnue"}). Les anciennes versions contiennent des failles de sécurité exploitables.`,
-      recommendation: `Mettez à jour ${cmsInfo.name} vers la version ${KNOWN_LATEST_VERSIONS[cmsInfo.name] || "la plus récente"} immédiatement.`,
-    });
-  } else if (cmsInfo.isOutdated === false) {
-    checks.push({
-      id: "cms-uptodate",
-      category: "cms",
-      name: `${cmsInfo.name} est à jour`,
-      status: "pass",
-      description: `${cmsInfo.name} ${cmsInfo.version} est à jour.`,
-    });
+  // Version gap check — severity calibrated by major vs minor gap
+  if (cmsInfo.version && cmsInfo.name) {
+    const latest = KNOWN_LATEST_VERSIONS[cmsInfo.name];
+    if (latest) {
+      const gap = versionGap(cmsInfo.version, latest);
+      if (gap === "major") {
+        checks.push({
+          id: "cms-outdated",
+          category: "cms",
+          name: `${cmsInfo.name} majeure obsolète`,
+          status: "fail",
+          severity: "high",
+          description: `${cmsInfo.name} ${cmsInfo.version} a au moins une version majeure de retard (dernière connue : ${latest}). Les anciennes versions ne reçoivent plus de correctifs de sécurité.`,
+          recommendation: `Mettez à jour ${cmsInfo.name} vers la dernière version majeure.`,
+        });
+      } else if (gap === "minor") {
+        checks.push({
+          id: "cms-outdated-minor",
+          category: "cms",
+          name: `${cmsInfo.name} légèrement obsolète`,
+          status: "warn",
+          severity: "low",
+          description: `${cmsInfo.name} ${cmsInfo.version} — version mineure en retard (dernière connue : ${latest}).`,
+          recommendation: `Mettez à jour ${cmsInfo.name} vers la dernière version mineure.`,
+        });
+      } else {
+        checks.push({
+          id: "cms-uptodate",
+          category: "cms",
+          name: `${cmsInfo.name} est à jour`,
+          status: "pass",
+          description: `${cmsInfo.name} ${cmsInfo.version} est à jour.`,
+        });
+      }
+    }
   }
 
   return checks;
@@ -2256,16 +2854,17 @@ function checkPerformance(headers: Headers, html: string, responseTime: number):
       : undefined,
   });
 
-  // HTML size
+  // HTML size — perf-only signal (les sites SSR/RSC modernes pèsent souvent >500 Ko), jamais de fail
   const htmlSize = new Blob([html]).size;
   const htmlSizeKB = Math.round(htmlSize / 1024);
+  const htmlStatus: "pass" | "info" | "warn" = htmlSizeKB < 500 ? "pass" : htmlSizeKB < 1500 ? "info" : "warn";
   checks.push({
     id: "html-size",
     category: "performance",
     name: "Taille du HTML",
-    status: htmlSizeKB < 100 ? "pass" : htmlSizeKB < 500 ? "warn" : "fail",
-    severity: htmlSizeKB >= 500 ? "medium" : undefined,
-    description: `Page HTML : ${htmlSizeKB} Ko.${htmlSizeKB < 100 ? " Optimal." : htmlSizeKB < 500 ? " Acceptable." : " Trop volumineux."}`,
+    status: htmlStatus,
+    severity: htmlStatus === "warn" ? "low" : undefined,
+    description: `Page HTML : ${htmlSizeKB} Ko.${htmlSizeKB < 500 ? " Optimal." : htmlSizeKB < 1500 ? " Courant sur les sites SSR modernes." : " Volumineux — pensez au streaming ou à la pagination."}`,
     value: `${htmlSizeKB} Ko`,
     recommendation: htmlSizeKB >= 500
       ? "Réduisez la taille du HTML : lazy loading, pagination, suppression du code inline inutile."
@@ -2402,12 +3001,49 @@ export async function POST(request: NextRequest) {
     const html = await response.text();
     const headers = response.headers;
 
+    // Infra detection (CDN/managed host) + shared soft 404 detector — done once, reused by all checks
+    const infra = detectInfra(headers);
+    const origin = new URL(targetUrl).origin;
+    const hostname = new URL(targetUrl).hostname;
+    const soft404 = await createSoft404Detector(origin);
+
+    // Refresh the latest-known CMS versions in parallel with the main checks
+    // (24 h cache, so this is cheap on repeated runs).
+    try {
+      const live = await preloadLatestVersions();
+      KNOWN_LATEST_VERSIONS = { ...KNOWN_LATEST_VERSIONS, ...live };
+    } catch {
+      // Stay on fallback table
+    }
+
     // Run all checks in parallel where possible
-    const [sslChecks, owaspChecks, infraChecks, incidentChecks, rgpdChecks, wpChecks, joomlaChecks, drupalChecks, psChecks] = await Promise.all([
+    const [
+      sslChecks,
+      tlsChecks,
+      httpProtocolChecks,
+      caaChecks,
+      takeoverChecks,
+      owaspChecks,
+      dirListingChecks,
+      graphqlChecks,
+      infraChecks,
+      incidentChecks,
+      rgpdChecks,
+      wpChecks,
+      joomlaChecks,
+      drupalChecks,
+      psChecks,
+    ] = await Promise.all([
       checkSSL(targetUrl, isHttps),
-      checkOWASP(targetUrl, html),
+      checkTLS(targetUrl),
+      checkHttpProtocols(targetUrl),
+      checkCAA(hostname),
+      checkSubdomainTakeover(hostname),
+      checkOWASP(targetUrl, html, soft404),
+      checkDirectoryListing(targetUrl, soft404),
+      checkGraphQLIntrospection(targetUrl),
       checkInfrastructure(targetUrl, headers),
-      checkIncidentResponse(targetUrl, headers, html),
+      checkIncidentResponse(targetUrl, headers, html, infra, soft404),
       checkRGPD(html, targetUrl),
       checkWordPress(targetUrl, html),
       checkJoomla(targetUrl, html),
@@ -2415,16 +3051,45 @@ export async function POST(request: NextRequest) {
       checkPrestaShop(targetUrl, html),
     ]);
 
-    const cmsInfo = detectCMSInfo(html, headers, targetUrl);
+    // Deep CSP analysis (in addition to the basic presence check)
+    const cspHeader = headers.get("content-security-policy") || headers.get("content-security-policy-report-only");
+    const cspDeepChecks = analyzeCSP(cspHeader);
+
+    const cmsInfo = detectCMSInfo(html);
     const cmsVersionChecks = checkCMSVersion(cmsInfo);
 
-    const allChecks: AuditCheck[] = [
+    // Multi-page crawl — audit representative routes to catch config inconsistencies
+    // (e.g. headers present on / but absent on /login)
+    let crawledRoutes: string[] = [];
+    const crawlExtraChecks: AuditCheck[] = [];
+    try {
+      const discovered = await discoverRoutes(targetUrl, 5);
+      if (discovered.length > 1) {
+        const { routeHeaders, extraChecks } = await crawlAndAuditHeaders(discovered);
+        crawledRoutes = routeHeaders.map((r) => r.route);
+        crawlExtraChecks.push(...extraChecks);
+      } else if (discovered.length === 1) {
+        crawledRoutes = discovered;
+      }
+    } catch {
+      // Crawl is best-effort — a failure must not break the main audit
+    }
+
+    const baseChecks: AuditCheck[] = [
       ...sslChecks,
-      ...checkSecurityHeaders(headers),
+      ...tlsChecks,
+      ...httpProtocolChecks,
+      ...checkSecurityHeaders(headers, infra),
+      ...cspDeepChecks,
       ...checkInfoLeakage(headers),
+      ...checkSecretsExposure(html),
       ...checkCookies(headers),
       ...owaspChecks,
+      ...dirListingChecks,
+      ...graphqlChecks,
       ...infraChecks,
+      ...caaChecks,
+      ...takeoverChecks,
       ...rgpdChecks,
       ...checkXSSVectors(html),
       ...incidentChecks,
@@ -2434,10 +3099,90 @@ export async function POST(request: NextRequest) {
       ...drupalChecks,
       ...psChecks,
       ...cmsVersionChecks,
+      ...crawlExtraChecks,
     ];
 
     const technologies = detectTechnologies(headers, html);
-    const { score, grade, status, categoryScores } = calculateScore(allChecks);
+    const stackInfo = detectStack(html, headers, technologies);
+
+    // Enrich checks with compliance refs + stack-specific remediations
+    const enrichedChecks = enhanceWithStackRemediations(
+      enrichWithCompliance(baseChecks),
+      stackInfo
+    );
+
+    const { score, grade, status, categoryScores } = calculateScore(enrichedChecks);
+
+    // Generate action plan (top-N prioritized by ROI)
+    const actionPlan = buildActionPlan(enrichedChecks, 10);
+
+    // Build threat model based on detected stack + current findings
+    const threatModel = buildThreatModel(
+      stackInfo,
+      enrichedChecks.map((c) => ({ id: c.id, status: c.status }))
+    );
+
+    // Regression detection — compare with last stored audit of the same site
+    let regressions: Regression[] = [];
+    try {
+      const previous = getPreviousAudit(targetUrl, "security");
+      if (previous && previous.report && typeof previous.report === "object") {
+        const prevReport = previous.report as { checks?: AuditCheck[] };
+        const prevChecks = Array.isArray(prevReport.checks) ? prevReport.checks : [];
+        const prevMap = new Map(prevChecks.map((c) => [c.id, c]));
+        const regressionSeverity: Record<string, number> = { pass: 0, info: 0, warn: 1, fail: 2 };
+        for (const curr of enrichedChecks) {
+          const prev = prevMap.get(curr.id);
+          if (!prev) continue;
+          const prevLvl = regressionSeverity[prev.status] ?? 0;
+          const currLvl = regressionSeverity[curr.status] ?? 0;
+          if (currLvl > prevLvl) {
+            regressions.push({
+              checkId: curr.id,
+              name: curr.name,
+              previousStatus: prev.status,
+              currentStatus: curr.status,
+              previousAuditAt: previous.createdAt,
+            });
+          }
+        }
+        // Cap to 10
+        regressions = regressions.slice(0, 10);
+      }
+    } catch {
+      // Regression detection is best-effort
+    }
+
+    // Persist the full report so it can be shared publicly + used as baseline
+    let reportId: string | undefined;
+    try {
+      reportId = insertAuditReport({
+        siteUrl: targetUrl,
+        score,
+        grade,
+        auditType: "security",
+        report: {
+          url: targetUrl,
+          timestamp: new Date().toISOString(),
+          score,
+          grade,
+          status,
+          checks: enrichedChecks,
+          categoryScores,
+          responseTime,
+          tlsInfo: { secure: isHttps },
+          technologies,
+          cmsInfo,
+          stack: stackInfo,
+          actionPlan,
+          threatModel,
+          regressions,
+          crawledRoutes,
+        },
+      });
+    } catch {
+      // Storage failure must not break the response
+    }
 
     const result: AuditResult = {
       url: targetUrl,
@@ -2445,12 +3190,19 @@ export async function POST(request: NextRequest) {
       score,
       grade,
       status,
-      checks: allChecks,
+      checks: enrichedChecks,
       categoryScores,
       responseTime,
       tlsInfo: { secure: isHttps },
       technologies,
       cmsInfo,
+      stack: stackInfo,
+      actionPlan,
+      threatModel,
+      regressions,
+      crawledRoutes,
+      reportId,
+      publicUrl: reportId ? `/security-audit/r/${reportId}` : undefined,
     };
 
     // Track audit request

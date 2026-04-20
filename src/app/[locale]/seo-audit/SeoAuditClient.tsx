@@ -30,7 +30,6 @@ import {
   TrendingUp,
   FileSearch,
   Layers,
-  MonitorSmartphone,
   ShieldCheck,
   Download,
 } from "lucide-react";
@@ -40,37 +39,24 @@ import { jsPDF } from "jspdf";
 import { translations, type SeoTranslations, getDateLocale } from "./translations";
 import UnlockGate from "@/components/UnlockGate";
 
-interface SeoCheck {
-  id: string;
-  category: string;
-  name: string;
-  status: "pass" | "warn" | "fail" | "info";
-  severity?: "critical" | "high" | "medium" | "low" | "info";
-  description: string;
-  value?: string;
-  recommendation?: string;
-}
+import type {
+  AuditCheck as SeoCheck,
+  AuditResult,
+  ActionItem,
+  ThreatVector,
+  StackInfo,
+  SeoMeta,
+} from "@/types/audit";
 
-interface SeoAuditResult {
-  url: string;
-  timestamp: string;
-  score: number;
-  grade: string;
-  checks: SeoCheck[];
-  responseTime: number;
+// AuditResult requires pageSize/seoMeta/headings/links/images when used for SEO.
+// Re-type locally so legacy field accesses remain ergonomic and safe.
+type SeoAuditResult = AuditResult & {
   pageSize: number;
-  meta: {
-    title: string | null;
-    description: string | null;
-    canonical: string | null;
-    ogImage: string | null;
-    language: string | null;
-  };
+  seoMeta: SeoMeta;
   headings: { tag: string; text: string }[];
   links: { internal: number; external: number; broken: number };
   images: { total: number; withAlt: number; withoutAlt: number };
-  technologies: string[];
-}
+};
 
 function getCategoryLabels(t: SeoTranslations) {
   return {
@@ -217,7 +203,7 @@ function CheckCard({ check, t }: { check: SeoCheck; t: SeoTranslations }) {
   );
 }
 
-function MetaPreview({ meta, url, t }: { meta: SeoAuditResult["meta"]; url: string; t: SeoTranslations }) {
+function MetaPreview({ seoMeta, url, t }: { seoMeta: SeoMeta; url: string; t: SeoTranslations }) {
   const displayUrl = (() => {
     try {
       const u = new URL(url);
@@ -236,10 +222,10 @@ function MetaPreview({ meta, url, t }: { meta: SeoAuditResult["meta"]; url: stri
       <div className="bg-white dark:bg-zinc-900 rounded-xl p-4 border border-border/30 max-w-2xl">
         <p className="text-sm text-green-700 dark:text-green-400 mb-1 truncate">{displayUrl}</p>
         <p className="text-lg text-blue-600 dark:text-blue-400 font-medium mb-1 line-clamp-1 hover:underline cursor-pointer">
-          {meta.title || t.missingTitle}
+          {seoMeta.title || t.missingTitle}
         </p>
         <p className="text-sm text-zinc-600 dark:text-zinc-400 line-clamp-2">
-          {meta.description || t.missingDescription}
+          {seoMeta.description || t.missingDescription}
         </p>
       </div>
     </div>
@@ -468,11 +454,11 @@ function generatePDF(result: SeoAuditResult, t: SeoTranslations, dateLocale: str
   y += 6;
 
   const metaItems = [
-    ["Title", result.meta.title || t.pdfMissing],
-    ["Description", result.meta.description || t.pdfMissingFem],
-    ["Canonical", result.meta.canonical || t.pdfAbsent],
-    ["Langue", result.meta.language || t.pdfUndefined],
-    ["OG Image", result.meta.ogImage ? t.pdfPresent : t.pdfAbsent],
+    ["Title", result.seoMeta.title || t.pdfMissing],
+    ["Description", result.seoMeta.description || t.pdfMissingFem],
+    ["Canonical", result.seoMeta.canonical || t.pdfAbsent],
+    ["Langue", result.seoMeta.language || t.pdfUndefined],
+    ["OG Image", result.seoMeta.ogImage ? t.pdfPresent : t.pdfAbsent],
   ];
   for (const [label, value] of metaItems) {
     doc.setFontSize(9);
@@ -692,6 +678,179 @@ function generatePDF(result: SeoAuditResult, t: SeoTranslations, dateLocale: str
   doc.save(`seo-audit-${hostname}-${new Date().toISOString().split("T")[0]}.pdf`);
 }
 
+// =============================================================================
+// ACTION PLAN — prioritized top-N with ROI
+// =============================================================================
+
+function SeoActionPlan({ actionPlan, t }: { actionPlan: ActionItem[]; t: SeoTranslations }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const sevCfg = getSeverityConfig(t);
+  const totalMin = actionPlan.reduce((s, i) => s + i.effortMinutes, 0);
+  const totalPts = actionPlan.reduce((s, i) => s + i.pointsGained, 0);
+  const hours = Math.ceil(totalMin / 60);
+
+  return (
+    <div className="p-6 rounded-2xl border border-primary/30 bg-primary/5">
+      <div className="flex items-center gap-2 mb-2">
+        <ArrowUpRight className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">Plan d&apos;action SEO prioritaire</h3>
+      </div>
+      <p className="text-sm text-muted-foreground mb-4">
+        {actionPlan.length} action{actionPlan.length > 1 ? "s" : ""} à ~{hours} h au total · gain estimé +{totalPts.toFixed(0)} points
+      </p>
+      <ol className="space-y-2">
+        {actionPlan.map((item, i) => {
+          const sev = sevCfg[item.severity];
+          const isOpen = !!expanded[item.checkId];
+          return (
+            <li key={item.checkId} className="rounded-lg border border-border/50 bg-background/50">
+              <button
+                type="button"
+                onClick={() => setExpanded((e) => ({ ...e, [item.checkId]: !e[item.checkId] }))}
+                className="w-full flex items-center gap-3 p-3 text-left hover:bg-muted/30 transition-colors rounded-lg"
+              >
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+                  {i + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{item.title}</p>
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                    {sev && (
+                      <span className={cn("px-1.5 py-0.5 rounded border", sev.color)}>{sev.label}</span>
+                    )}
+                    <span className="inline-flex items-center gap-1 text-muted-foreground">
+                      ~{item.effortMinutes} min
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                      +{item.pointsGained.toFixed(1)} pts
+                    </span>
+                  </div>
+                </div>
+                {isOpen ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
+              </button>
+              {isOpen && (
+                <div className="border-t border-border/50 bg-muted/20 p-3 text-sm space-y-3">
+                  {item.recommendation && (
+                    <p className="whitespace-pre-line text-muted-foreground">{item.recommendation}</p>
+                  )}
+                  {item.stackRemediation && (
+                    <div>
+                      <p className="text-xs font-medium mb-1.5">Code {item.stackRemediation.stack}</p>
+                      <pre className="overflow-x-auto rounded bg-background p-3 text-xs font-mono">
+                        <code>{item.stackRemediation.code}</code>
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// =============================================================================
+// THREAT MODEL — SEO-specific penalty vectors
+// =============================================================================
+
+function SeoThreatModelSection({ threatModel, stack }: { threatModel: ThreatVector[]; stack?: StackInfo }) {
+  const sevColors: Record<string, string> = {
+    critical: "border-red-500/50 bg-red-500/5",
+    high: "border-orange-500/50 bg-orange-500/5",
+    medium: "border-yellow-500/50 bg-yellow-500/5",
+    low: "border-border/50 bg-muted/20",
+    info: "border-border/50 bg-muted/20",
+  };
+  return (
+    <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
+      <div className="flex items-center gap-2 mb-4">
+        <TrendingUp className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">
+          Risques SEO spécifiques
+          {stack?.primaryFramework && ` (${stack.primaryFramework})`}
+        </h3>
+      </div>
+      <div className="space-y-3">
+        {threatModel.map((threat) => (
+          <details
+            key={threat.id}
+            className={cn("rounded-lg border p-4", sevColors[threat.severity])}
+          >
+            <summary className="cursor-pointer font-medium flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-background/60 border border-border/40">
+                {threat.severity}
+              </span>
+              <span>{threat.title}</span>
+            </summary>
+            <p className="mt-2 text-sm text-muted-foreground">{threat.description}</p>
+            <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
+              {threat.mitigations.map((m, i) => (
+                <li key={i}>{m}</li>
+              ))}
+            </ul>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// SHAREABLE REPORT
+// =============================================================================
+
+function SeoShareableReport({ reportId, locale, score, grade }: { reportId: string; locale: string; score: number; grade: string }) {
+  const [copied, setCopied] = useState<"url" | "md" | "html" | null>(null);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const pageUrl = `${origin}/${locale}/seo-audit/r/${reportId}`;
+  const badgeUrl = `${origin}/api/seo-audit/badge/${reportId}.svg`;
+  const markdown = `[![seo audit](${badgeUrl})](${pageUrl})`;
+  const html = `<a href="${pageUrl}"><img src="${badgeUrl}" alt="seo audit: ${grade} (${score}/100)"/></a>`;
+
+  function copy(text: string, kind: "url" | "md" | "html") {
+    navigator.clipboard.writeText(text);
+    setCopied(kind);
+    setTimeout(() => setCopied(null), 2000);
+  }
+
+  return (
+    <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
+      <div className="flex items-center gap-2 mb-3">
+        <FileText className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">Partager ce rapport</h3>
+      </div>
+      <div className="flex items-center gap-3 mb-4">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={badgeUrl} alt="seo audit badge" className="h-5" />
+      </div>
+      <div className="space-y-2">
+        <SeoSnippetRow label="URL" value={pageUrl} copied={copied === "url"} onCopy={() => copy(pageUrl, "url")} />
+        <SeoSnippetRow label="Markdown" value={markdown} copied={copied === "md"} onCopy={() => copy(markdown, "md")} />
+        <SeoSnippetRow label="HTML" value={html} copied={copied === "html"} onCopy={() => copy(html, "html")} />
+      </div>
+    </div>
+  );
+}
+
+function SeoSnippetRow({ label, value, copied, onCopy }: { label: string; value: string; copied: boolean; onCopy: () => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-20 text-xs font-medium text-muted-foreground shrink-0">{label}</span>
+      <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-xs font-mono">{value}</code>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="inline-flex items-center gap-1 rounded border border-border/50 px-2 py-1 text-xs hover:bg-muted transition-colors shrink-0"
+        aria-label={`Copier ${label}`}
+      >
+        {copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+      </button>
+    </div>
+  );
+}
+
 function buildSeoReportText(result: SeoAuditResult, t: SeoTranslations, dateLocale: string): string {
   const { quickWins, warnings, improvements } = generateSeoReportText(result);
   return `${t.reportTitle}
@@ -710,10 +869,10 @@ ${t.reportSummary}
 
 ${t.reportMeta}
 ------------
-${t.reportTitle2} : ${result.meta.title || "MANQUANT"}
-${t.reportDescription} : ${result.meta.description || "MANQUANTE"}
-${t.reportCanonical} : ${result.meta.canonical || "ABSENTE"}
-${t.reportLanguage} : ${result.meta.language || "NON DEFINIE"}
+${t.reportTitle2} : ${result.seoMeta.title || "MANQUANT"}
+${t.reportDescription} : ${result.seoMeta.description || "MANQUANTE"}
+${t.reportCanonical} : ${result.seoMeta.canonical || "ABSENTE"}
+${t.reportLanguage} : ${result.seoMeta.language || "NON DEFINIE"}
 
 ${t.reportStats}
 ------------
@@ -1026,11 +1185,60 @@ export default function SeoAuditClient({ locale = "fr" }: { locale?: string }) {
               />
             ) : (
             <>
+            {/* Regressions since last audit */}
+            {result.regressions && result.regressions.length > 0 && (
+              <div className="p-6 rounded-2xl border border-orange-500/40 bg-orange-500/5">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  <h3 className="text-lg font-semibold">
+                    {result.regressions.length} régression{result.regressions.length > 1 ? "s" : ""} depuis votre dernier audit
+                  </h3>
+                </div>
+                <ul className="space-y-1.5 text-sm">
+                  {result.regressions.map((reg) => (
+                    <li key={reg.checkId} className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-muted-foreground px-1.5 py-0.5 rounded bg-muted/50">{reg.previousStatus}</span>
+                      <ArrowUpRight className="w-3 h-3 text-orange-500 rotate-45" />
+                      <span className="font-mono text-xs text-orange-600 dark:text-orange-400 font-semibold px-1.5 py-0.5 rounded bg-orange-500/10">{reg.currentStatus}</span>
+                      <span>{reg.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Action Plan */}
+            {result.actionPlan && result.actionPlan.length > 0 && (
+              <SeoActionPlan actionPlan={result.actionPlan} t={t} />
+            )}
+
+            {/* Threat Model */}
+            {result.threatModel && result.threatModel.length > 0 && (
+              <SeoThreatModelSection threatModel={result.threatModel} stack={result.stack} />
+            )}
+
+            {/* Site context + crawled routes */}
+            {(result.siteContext?.type || (result.crawledRoutes && result.crawledRoutes.length > 1)) && (
+              <div className="p-4 rounded-xl border border-border/50 bg-card/30 flex flex-wrap gap-4 text-sm text-muted-foreground">
+                {result.siteContext?.type && result.siteContext.type !== "unknown" && (
+                  <span><Globe className="w-3.5 h-3.5 inline mr-1" />Site détecté : <strong className="capitalize text-foreground">{result.siteContext.type}</strong></span>
+                )}
+                {result.crawledRoutes && result.crawledRoutes.length > 1 && (
+                  <span><Layers className="w-3.5 h-3.5 inline mr-1" />{result.crawledRoutes.length} routes auditées</span>
+                )}
+              </div>
+            )}
+
+            {/* Shareable report + badge */}
+            {result.reportId && (
+              <SeoShareableReport reportId={result.reportId} locale={locale} score={result.score} grade={result.grade} />
+            )}
+
             {/* Quick Stats */}
             <QuickStats responseTime={result.responseTime} pageSize={result.pageSize} links={result.links} images={result.images} t={t} />
 
             {/* SERP Preview */}
-            <MetaPreview meta={result.meta} url={result.url} t={t} />
+            <MetaPreview seoMeta={result.seoMeta} url={result.url} t={t} />
 
             {/* Technologies */}
             {result.technologies.length > 0 && (

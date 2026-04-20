@@ -1,44 +1,49 @@
 import { NextRequest, NextResponse } from "next/server";
-import { insertAuditRequest } from "@/lib/db";
+import { insertAuditRequest, insertAuditReport, getPreviousAudit } from "@/lib/db";
+import type {
+  AuditCheck,
+  CategoryScore,
+  AuditResult,
+  AuditStatus,
+  Regression,
+  SeoMeta,
+} from "@/types/audit";
+
+import {
+  stripScriptsAndStyles,
+  parseMetaTags,
+  getMetaContent,
+  parseLinkTags,
+  getLinksByRel,
+  extractPageTitle,
+  extractLangAttribute,
+  extractHeadings,
+  parseImgTags,
+  parseAnchorTags,
+  categorizeLinks,
+  extractVisibleText,
+  wordCount,
+} from "@/lib/audit/html-parse";
+import { validateJsonLd } from "@/lib/audit/json-ld";
+import { validateHreflang } from "@/lib/audit/hreflang";
+import { checkSitemap } from "@/lib/audit/sitemap";
+import { checkOgImage } from "@/lib/audit/og-image";
+import { detectSiteContext, severityPolicyFor } from "@/lib/audit/site-context";
+import { buildSeoThreatModel } from "@/lib/audit/seo-threats";
+import { detectStack } from "@/lib/audit/stack";
+import { enrichWithCompliance } from "@/lib/audit/compliance";
+import { enhanceWithStackRemediations } from "@/lib/audit/remediations";
+import { buildActionPlan } from "@/lib/audit/action-plan";
+import { discoverRoutes } from "@/lib/audit/crawl";
+import { sameLogicalUrl, normaliseUrlForComparison } from "@/lib/audit/fetch";
+import { checkBrokenLinks } from "@/lib/audit/link-check";
+import { checkPageSpeed } from "@/lib/audit/pagespeed";
 
 // =============================================================================
-// SEO AUDIT API — Analyse SEO approfondie
-// Technique, On-Page, Performance, Off-Page, Recommandations
+// SEO AUDIT API — analyse SEO approfondie, robuste aux FPs, enrichie
+// Technique + On-Page + Performance + Off-Page + Action Plan + Threat Model
 // =============================================================================
 
-interface SeoCheck {
-  id: string;
-  category: string;
-  name: string;
-  status: "pass" | "warn" | "fail" | "info";
-  severity?: "critical" | "high" | "medium" | "low" | "info";
-  description: string;
-  value?: string;
-  recommendation?: string;
-}
-
-interface SeoAuditResult {
-  url: string;
-  timestamp: string;
-  score: number;
-  grade: string;
-  checks: SeoCheck[];
-  responseTime: number;
-  pageSize: number;
-  meta: {
-    title: string | null;
-    description: string | null;
-    canonical: string | null;
-    ogImage: string | null;
-    language: string | null;
-  };
-  headings: { tag: string; text: string }[];
-  links: { internal: number; external: number; broken: number };
-  images: { total: number; withAlt: number; withoutAlt: number };
-  technologies: string[];
-}
-
-// Helper: safe fetch with timeout
 async function safeFetch(
   url: string,
   options: RequestInit & { timeout?: number } = {}
@@ -54,834 +59,760 @@ async function safeFetch(
   }
 }
 
-// Helper: extract text between tags
-function extractTag(html: string, tag: string): string | null {
-  const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
-  const match = html.match(regex);
-  return match ? match[1].trim() : null;
-}
-
-// Helper: extract meta content
-function extractMeta(html: string, name: string): string | null {
-  // Try name attribute
-  const nameRegex = new RegExp(
-    `<meta[^>]*name=["']${name}["'][^>]*content=["']([^"']*)["'][^>]*/?>`,
-    "i"
-  );
-  let match = html.match(nameRegex);
-  if (match) return match[1].trim();
-
-  // Try content before name
-  const reverseRegex = new RegExp(
-    `<meta[^>]*content=["']([^"']*)["'][^>]*name=["']${name}["'][^>]*/?>`,
-    "i"
-  );
-  match = html.match(reverseRegex);
-  if (match) return match[1].trim();
-
-  // Try property attribute (Open Graph)
-  const propRegex = new RegExp(
-    `<meta[^>]*property=["']${name}["'][^>]*content=["']([^"']*)["'][^>]*/?>`,
-    "i"
-  );
-  match = html.match(propRegex);
-  if (match) return match[1].trim();
-
-  const propReverseRegex = new RegExp(
-    `<meta[^>]*content=["']([^"']*)["'][^>]*property=["']${name}["'][^>]*/?>`,
-    "i"
-  );
-  match = html.match(propReverseRegex);
-  return match ? match[1].trim() : null;
-}
-
-// Helper: extract all attribute values
-function extractAllAttributes(html: string, tag: string, attr: string): string[] {
-  const regex = new RegExp(`<${tag}[^>]*${attr}=["']([^"']*)["'][^>]*/?>`, "gi");
-  const results: string[] = [];
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    results.push(match[1]);
+function isValidHttpUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname;
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "0.0.0.0" ||
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      host.startsWith("172.16.") ||
+      host.endsWith(".internal") ||
+      host.endsWith(".local")
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
-  return results;
 }
 
-// Helper: extract headings
-function extractHeadings(html: string): { tag: string; text: string }[] {
-  const regex = /<(h[1-6])[^>]*>([\s\S]*?)<\/\1>/gi;
-  const headings: { tag: string; text: string }[] = [];
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const text = match[2].replace(/<[^>]*>/g, "").trim();
-    if (text) headings.push({ tag: match[1].toUpperCase(), text });
-  }
-  return headings;
-}
-
-// Helper: detect technologies from HTML
 function detectTechnologies(html: string, headers: Headers): string[] {
   const techs: string[] = [];
-  const checks: [string, RegExp | string][] = [
-    ["Next.js", /__next/],
+  const checks: [string, RegExp][] = [
+    ["Next.js", /__next|\/_next\/static/],
+    ["Nuxt.js", /__nuxt/],
     ["React", /react/i],
-    ["Vue.js", /vue/i],
-    ["Angular", /ng-version/i],
-    ["WordPress", /wp-content/i],
-    ["Shopify", /shopify/i],
-    ["Wix", /wix\.com/i],
-    ["Squarespace", /squarespace/i],
-    ["jQuery", /jquery/i],
-    ["Bootstrap", /bootstrap/i],
-    ["Tailwind CSS", /tailwind/i],
-    ["Google Analytics", /google-analytics|gtag|googletagmanager/i],
-    ["Google Tag Manager", /googletagmanager\.com\/gtm/i],
-    ["Facebook Pixel", /fbq\(|facebook\.net/i],
-    ["Hotjar", /hotjar/i],
-    ["Cloudflare", /cloudflare/i],
-    ["Vercel", /vercel/i],
-    ["Netlify", /netlify/i],
-    ["Schema.org", /schema\.org/i],
-    ["Open Graph", /og:title|og:description/i],
-    ["Twitter Cards", /twitter:card/i],
-    ["AMP", /ampproject\.org/i],
+    ["Vue.js", /vue\.js|v-for\b|v-if\b/],
+    ["Angular", /ng-version=/],
+    ["Astro", /astro-island/],
+    ["SvelteKit", /sveltekit/i],
+    ["WordPress", /\/wp-content\/(?:themes|plugins|uploads)/],
+    ["Shopify", /cdn\.shopify\.com|Shopify\.theme/],
+    ["Wix", /static\.wixstatic\.com|_wixCssModules/],
+    ["Squarespace", /static\d?\.squarespace\.com/],
+    ["jQuery", /\/jquery(?:[.-]\d|\.min)?\.js/],
+    ["Bootstrap", /bootstrap(?:\.min)?\.(?:js|css)/],
+    ["Tailwind CSS", /tailwindcss|tw-[a-z]/],
+    ["Google Analytics", /google-analytics\.com|\bgtag\s*\(/],
+    ["Google Tag Manager", /googletagmanager\.com\/gtm/],
+    ["Facebook Pixel", /connect\.facebook\.net|\bfbq\s*\(/],
+    ["Hotjar", /static\.hotjar\.com/],
+    ["Cloudflare", /cloudflare|cf-ray/i],
+    ["Vercel", /vercel|x-vercel-id/i],
+    ["Netlify", /netlify\.com|x-nf-request-id/i],
+    ["Schema.org", /schema\.org/],
+    ["Open Graph", /property=["']og:(?:title|description|image)["']/],
+    ["Twitter Cards", /name=["']twitter:card["']/],
+    ["AMP", /ampproject\.org/],
     ["Umami", /umami/i],
     ["Matomo", /matomo|piwik/i],
     ["Plausible", /plausible/i],
   ];
-
   for (const [name, pattern] of checks) {
-    if (pattern instanceof RegExp ? pattern.test(html) : html.includes(pattern)) {
-      techs.push(name);
-    }
+    if (pattern.test(html)) techs.push(name);
   }
-
-  const server = headers.get("server");
-  if (server) {
-    if (/nginx/i.test(server)) techs.push("Nginx");
-    if (/apache/i.test(server)) techs.push("Apache");
-    if (/cloudflare/i.test(server) && !techs.includes("Cloudflare")) techs.push("Cloudflare");
-  }
-
-  const poweredBy = headers.get("x-powered-by");
-  if (poweredBy) {
-    if (/express/i.test(poweredBy)) techs.push("Express.js");
-    if (/php/i.test(poweredBy)) techs.push("PHP");
-    if (/asp\.net/i.test(poweredBy)) techs.push("ASP.NET");
-  }
-
+  const server = (headers.get("server") || "").toLowerCase();
+  if (server.includes("nginx") && !techs.includes("Nginx")) techs.push("Nginx");
+  if (server.includes("apache") && !techs.includes("Apache")) techs.push("Apache");
+  if (server.includes("cloudflare") && !techs.includes("Cloudflare")) techs.push("Cloudflare");
+  const poweredBy = (headers.get("x-powered-by") || "").toLowerCase();
+  if (poweredBy.includes("express")) techs.push("Express.js");
+  if (poweredBy.includes("php")) techs.push("PHP");
+  if (poweredBy.includes("asp.net")) techs.push("ASP.NET");
   return [...new Set(techs)];
 }
 
 // =============================================================================
-// 1. ANALYSE TECHNIQUE
+// 1. TECHNICAL CHECKS
 // =============================================================================
 
 async function checkTechnical(
   targetUrl: string,
   html: string,
   headers: Headers,
-  responseTime: number,
-  isHttps: boolean
-): Promise<SeoCheck[]> {
-  const checks: SeoCheck[] = [];
-  const baseUrl = new URL(targetUrl);
+  responseTime: number
+): Promise<AuditCheck[]> {
+  const checks: AuditCheck[] = [];
+  const url = new URL(targetUrl);
+  const isHttps = url.protocol === "https:";
 
-  // HTTPS
   checks.push({
     id: "tech-https",
     category: "technical",
     name: "HTTPS",
     status: isHttps ? "pass" : "fail",
-    severity: isHttps ? "info" : "critical",
-    description: isHttps ? "Le site utilise HTTPS" : "Le site n'utilise pas HTTPS",
-    value: targetUrl,
-    recommendation: isHttps ? undefined : "Migrez vers HTTPS. C'est un facteur de ranking Google et essentiel pour la confiance.",
+    severity: isHttps ? undefined : "critical",
+    description: isHttps ? "Le site utilise HTTPS." : "Le site n'est pas servi en HTTPS — facteur de ranking Google négatif.",
+    recommendation: !isHttps ? "Migrez vers HTTPS (Let's Encrypt gratuit). Indispensable au SEO moderne." : undefined,
   });
 
-  // Response time (Core Web Vitals - TTFB proxy)
-  const ttfbStatus = responseTime < 800 ? "pass" : responseTime < 1800 ? "warn" : "fail";
+  // TTFB — calibré sur les recommandations Google (< 600 ms bon, < 800 ms warn, < 1800 ms acceptable)
+  const ttfbStatus = responseTime < 600 ? "pass" : responseTime < 1200 ? "warn" : "fail";
   checks.push({
     id: "tech-ttfb",
     category: "technical",
-    name: "Temps de reponse serveur (TTFB)",
+    name: "Temps de réponse serveur (TTFB)",
     status: ttfbStatus,
-    severity: ttfbStatus === "fail" ? "high" : ttfbStatus === "warn" ? "medium" : "info",
-    description: `Temps de reponse : ${responseTime}ms`,
-    value: `${responseTime}ms`,
-    recommendation: ttfbStatus !== "pass"
-      ? "Optimisez le TTFB : cache serveur, CDN, optimisation base de donnees, upgrade hosting."
-      : undefined,
-  });
-
-  // Page size
-  const pageSize = new Blob([html]).size;
-  const pageSizeKB = Math.round(pageSize / 1024);
-  const sizeStatus = pageSizeKB < 100 ? "pass" : pageSizeKB < 300 ? "warn" : "fail";
-  checks.push({
-    id: "tech-pagesize",
-    category: "technical",
-    name: "Taille de la page HTML",
-    status: sizeStatus,
-    severity: sizeStatus === "fail" ? "medium" : "info",
-    description: `Taille HTML : ${pageSizeKB} KB`,
-    value: `${pageSizeKB} KB`,
-    recommendation: sizeStatus !== "pass"
-      ? "Reduisez la taille HTML : minification, suppression du code inutile, lazy loading."
-      : undefined,
-  });
-
-  // Compression
-  const encoding = headers.get("content-encoding");
-  const hasCompression = encoding && /gzip|br|deflate/i.test(encoding);
-  checks.push({
-    id: "tech-compression",
-    category: "technical",
-    name: "Compression (Gzip/Brotli)",
-    status: hasCompression ? "pass" : "warn",
-    severity: hasCompression ? "info" : "medium",
-    description: hasCompression
-      ? `Compression active : ${encoding}`
-      : "Aucune compression detectee",
-    value: encoding || "Aucune",
-    recommendation: hasCompression
-      ? undefined
-      : "Activez la compression Gzip ou Brotli sur votre serveur pour reduire la taille des transferts.",
-  });
-
-  // Sitemap.xml
-  const sitemapUrl = `${baseUrl.origin}/sitemap.xml`;
-  const sitemapRes = await safeFetch(sitemapUrl, { timeout: 5000 });
-  const hasSitemap = sitemapRes && sitemapRes.ok;
-  checks.push({
-    id: "tech-sitemap",
-    category: "technical",
-    name: "Sitemap XML",
-    status: hasSitemap ? "pass" : "fail",
-    severity: hasSitemap ? "info" : "high",
-    description: hasSitemap
-      ? "Sitemap.xml accessible"
-      : "Sitemap.xml introuvable",
-    value: sitemapUrl,
-    recommendation: hasSitemap
-      ? undefined
-      : "Creez un sitemap.xml et soumettez-le a Google Search Console. Indispensable pour l'indexation.",
-  });
-
-  // Robots.txt
-  const robotsUrl = `${baseUrl.origin}/robots.txt`;
-  const robotsRes = await safeFetch(robotsUrl, { timeout: 5000 });
-  const hasRobots = robotsRes && robotsRes.ok;
-  let robotsContent = "";
-  if (hasRobots) {
-    robotsContent = await robotsRes.text();
-  }
-  const blocksAll = /^Disallow:\s*\/\s*$/m.test(robotsContent);
-  checks.push({
-    id: "tech-robots",
-    category: "technical",
-    name: "Robots.txt",
-    status: hasRobots ? (blocksAll ? "warn" : "pass") : "warn",
-    severity: blocksAll ? "high" : hasRobots ? "info" : "medium",
-    description: hasRobots
-      ? blocksAll
-        ? "Robots.txt bloque potentiellement l'indexation"
-        : "Robots.txt present et accessible"
-      : "Robots.txt introuvable",
-    value: hasRobots ? robotsContent.substring(0, 200) : "Non trouve",
-    recommendation: !hasRobots
-      ? "Ajoutez un fichier robots.txt pour guider les crawlers."
-      : blocksAll
-        ? "Verifiez que votre robots.txt ne bloque pas l'indexation des pages importantes."
+    severity: ttfbStatus === "fail" ? "high" : ttfbStatus === "warn" ? "medium" : undefined,
+    description: `TTFB mesuré : ${responseTime} ms. Google recommande < 600 ms.`,
+    value: `${responseTime} ms`,
+    recommendation:
+      ttfbStatus !== "pass"
+        ? "Ajoutez un CDN (Cloudflare, Vercel), du cache côté serveur, et optimisez vos requêtes DB."
         : undefined,
   });
 
-  // Canonical
-  const canonicalMatch = html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["'][^>]*\/?>/i)
-    || html.match(/<link[^>]*href=["']([^"']*)["'][^>]*rel=["']canonical["'][^>]*\/?>/i);
-  const canonical = canonicalMatch ? canonicalMatch[1] : null;
+  // Page size — perf signal only (pas de fail)
+  const pageSizeKB = Math.round(new Blob([html]).size / 1024);
+  const sizeStatus = pageSizeKB < 150 ? "pass" : pageSizeKB < 500 ? "info" : "warn";
   checks.push({
-    id: "tech-canonical",
+    id: "tech-pagesize",
     category: "technical",
-    name: "Balise Canonical",
-    status: canonical ? "pass" : "warn",
-    severity: canonical ? "info" : "medium",
-    description: canonical
-      ? "Balise canonical presente"
-      : "Aucune balise canonical detectee",
-    value: canonical || "Absente",
-    recommendation: canonical
-      ? undefined
-      : "Ajoutez une balise <link rel='canonical'> pour eviter le contenu duplique.",
+    name: "Taille du HTML",
+    status: sizeStatus,
+    severity: sizeStatus === "warn" ? "low" : undefined,
+    description: `${pageSizeKB} Ko de HTML servis.`,
+    value: `${pageSizeKB} Ko`,
   });
 
-  // Mobile viewport
-  const hasViewport = /name=["']viewport["']/i.test(html);
-  const viewportContent = extractMeta(html, "viewport");
+  // Compression
+  const encoding = headers.get("content-encoding") || "";
+  const hasCompression = /gzip|br|deflate|zstd/i.test(encoding);
   checks.push({
-    id: "tech-viewport",
+    id: "tech-compression",
     category: "technical",
-    name: "Balise Viewport (Mobile-Friendly)",
-    status: hasViewport ? "pass" : "fail",
-    severity: hasViewport ? "info" : "critical",
-    description: hasViewport
-      ? "Meta viewport presente"
-      : "Meta viewport absente — le site n'est pas mobile-friendly",
-    value: viewportContent || "Absente",
-    recommendation: hasViewport
-      ? undefined
-      : "Ajoutez <meta name='viewport' content='width=device-width, initial-scale=1'> pour le responsive.",
-  });
-
-  // Structured Data (Schema.org / JSON-LD)
-  const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
-  const hasJsonLd = jsonLdMatches && jsonLdMatches.length > 0;
-  let schemaTypes: string[] = [];
-  if (hasJsonLd) {
-    for (const block of jsonLdMatches!) {
-      const content = block.replace(/<[^>]*>/g, "");
-      try {
-        const parsed = JSON.parse(content);
-        if (parsed["@type"]) schemaTypes.push(parsed["@type"]);
-        if (Array.isArray(parsed["@graph"])) {
-          for (const item of parsed["@graph"]) {
-            if (item["@type"]) schemaTypes.push(item["@type"]);
-          }
-        }
-      } catch {}
-    }
-  }
-  checks.push({
-    id: "tech-structured-data",
-    category: "technical",
-    name: "Donnees structurees (Schema.org)",
-    status: hasJsonLd ? "pass" : "warn",
-    severity: hasJsonLd ? "info" : "medium",
-    description: hasJsonLd
-      ? `${jsonLdMatches!.length} bloc(s) JSON-LD detecte(s)`
-      : "Aucune donnee structuree JSON-LD detectee",
-    value: schemaTypes.length > 0 ? schemaTypes.join(", ") : "Aucun",
-    recommendation: hasJsonLd
-      ? undefined
-      : "Ajoutez des donnees structurees (JSON-LD) pour ameliorer les Rich Snippets dans les SERP.",
-  });
-
-  // Language / hreflang
-  const langMatch = html.match(/<html[^>]*lang=["']([^"']*)["']/i);
-  const lang = langMatch ? langMatch[1] : null;
-  const hasHreflang = /rel=["']alternate["'][^>]*hreflang/i.test(html);
-  checks.push({
-    id: "tech-lang",
-    category: "technical",
-    name: "Attribut lang & hreflang",
-    status: lang ? "pass" : "warn",
-    severity: lang ? "info" : "low",
-    description: lang
-      ? `Langue declaree : ${lang}${hasHreflang ? " + hreflang present" : ""}`
-      : "Aucun attribut lang sur <html>",
-    value: lang || "Non defini",
-    recommendation: !lang
-      ? "Ajoutez lang='fr' (ou votre langue) sur la balise <html> pour le SEO international."
+    name: "Compression (Brotli/Gzip)",
+    status: hasCompression ? "pass" : "warn",
+    severity: hasCompression ? undefined : "low",
+    description: hasCompression
+      ? `Compression active : ${encoding}.`
+      : "Aucune compression — transfert ralenti, impact mineur sur TTFB.",
+    value: encoding || "Aucune",
+    recommendation: !hasCompression
+      ? "Activez Brotli (préféré) ou gzip dans votre serveur / CDN."
       : undefined,
   });
 
-  // Cache headers
-  const cacheControl = headers.get("cache-control");
-  const hasCache = cacheControl && !/no-cache|no-store/i.test(cacheControl);
+  // Canonical — parsing via link tags (robuste)
+  const linkTags = parseLinkTags(html);
+  const canonicalLinks = getLinksByRel(linkTags, "canonical");
+  if (canonicalLinks.length === 0) {
+    checks.push({
+      id: "tech-canonical",
+      category: "technical",
+      name: "Balise canonical",
+      status: "warn",
+      severity: "medium",
+      description: "Aucune balise canonical. Risque de contenu dupliqué si des variantes d'URL existent (trailing slash, paramètres…).",
+      recommendation: `Ajoutez <link rel="canonical" href="${targetUrl}"> dans <head>.`,
+    });
+  } else if (canonicalLinks.length > 1) {
+    checks.push({
+      id: "tech-canonical-multiple",
+      category: "technical",
+      name: "Plusieurs balises canonical",
+      status: "fail",
+      severity: "high",
+      description: `${canonicalLinks.length} balises canonical détectées. Google ignore la deuxième — peut canonicaliser vers la mauvaise URL.`,
+      value: canonicalLinks.map((l) => l.href).join(" | "),
+      recommendation: "Gardez une seule <link rel=\"canonical\"> par page.",
+    });
+  } else {
+    const canonical = canonicalLinks[0].href;
+    let canonicalAbs = canonical;
+    try {
+      canonicalAbs = new URL(canonical, targetUrl).toString();
+    } catch {}
+    const matchesSelf = sameLogicalUrl(canonicalAbs, targetUrl);
+    // Detect www vs non-www mismatch even when domains match
+    const canonicalNorm = normaliseUrlForComparison(canonicalAbs);
+    const targetNorm = normaliseUrlForComparison(targetUrl);
+    const differentDomain = canonicalNorm && targetNorm && !matchesSelf &&
+      canonicalNorm.split("/")[2]?.split(":")[0] !== targetNorm.split("/")[2]?.split(":")[0];
+
+    if (differentDomain) {
+      checks.push({
+        id: "tech-canonical-cross-domain",
+        category: "technical",
+        name: "Canonical cross-domain",
+        status: "warn",
+        severity: "medium",
+        description: `Le canonical pointe vers un autre domaine (${canonicalAbs}). Si intentionnel (syndication), OK — sinon Google ne va pas indexer cette page.`,
+        value: canonicalAbs,
+        recommendation: "Vérifiez que le canonical est correct. Pour l'auto-référence, utilisez la même URL que la page.",
+      });
+    } else {
+      checks.push({
+        id: "tech-canonical",
+        category: "technical",
+        name: "Balise canonical",
+        status: "pass",
+        description: matchesSelf
+          ? "Canonical auto-référentielle — bonne pratique (comparaison normalisée : www/port/params ignorés)."
+          : `Canonical pointant vers : ${canonicalAbs}`,
+        value: canonicalAbs,
+      });
+    }
+  }
+
+  // Viewport — présence + contenu (anti-a11y flags)
+  const metas = parseMetaTags(html);
+  const viewport = getMetaContent(metas, "viewport");
+  if (!viewport) {
+    checks.push({
+      id: "tech-viewport",
+      category: "technical",
+      name: "Meta viewport",
+      status: "fail",
+      severity: "critical",
+      description: "Meta viewport absente. Le site ne s'adapte pas au mobile — Google dégrade le ranking mobile-first.",
+      recommendation: `Ajoutez <meta name="viewport" content="width=device-width, initial-scale=1"> dans <head>.`,
+    });
+  } else {
+    const normalized = viewport.toLowerCase().replace(/\s+/g, "");
+    const disablesZoom =
+      /user-scalable=no|user-scalable=0/.test(normalized) ||
+      /maximum-scale=1(?:\.0+)?[,;]?/.test(normalized);
+    const hasDeviceWidth = /width=device-width/.test(normalized);
+
+    if (disablesZoom) {
+      checks.push({
+        id: "tech-viewport-no-zoom",
+        category: "technical",
+        name: "Viewport : zoom désactivé (anti-accessibilité)",
+        status: "fail",
+        severity: "high",
+        description: `Viewport : "${viewport}". Empêcher le zoom utilisateur est une violation WCAG 2.1 (1.4.4 Resize Text) et pénalise l'UX mobile.`,
+        value: viewport,
+        recommendation: `Retirez user-scalable=no et maximum-scale=1. Utilisez uniquement : <meta name="viewport" content="width=device-width, initial-scale=1">.`,
+      });
+    } else if (!hasDeviceWidth) {
+      checks.push({
+        id: "tech-viewport-wrong",
+        category: "technical",
+        name: "Viewport incorrect",
+        status: "warn",
+        severity: "medium",
+        description: `Viewport : "${viewport}". Manque width=device-width — le site risque d'être mal rendu sur mobile.`,
+        value: viewport,
+        recommendation: `Utilisez : <meta name="viewport" content="width=device-width, initial-scale=1">.`,
+      });
+    } else {
+      checks.push({
+        id: "tech-viewport",
+        category: "technical",
+        name: "Meta viewport",
+        status: "pass",
+        description: `Viewport correctement configurée : "${viewport}"`,
+        value: viewport,
+      });
+    }
+  }
+
+  // Language on <html>
+  const lang = extractLangAttribute(html);
   checks.push({
-    id: "tech-cache",
+    id: "tech-lang",
     category: "technical",
-    name: "En-tetes de cache",
-    status: hasCache ? "pass" : "warn",
-    severity: hasCache ? "info" : "low",
-    description: hasCache
-      ? `Cache-Control: ${cacheControl}`
-      : "Pas de politique de cache efficace",
-    value: cacheControl || "Absent",
-    recommendation: hasCache
-      ? undefined
-      : "Configurez des en-tetes Cache-Control pour ameliorer les performances.",
+    name: "Attribut lang sur <html>",
+    status: lang ? "pass" : "warn",
+    severity: lang ? undefined : "low",
+    description: lang ? `Langue déclarée : ${lang}` : "Aucun attribut lang sur <html>. Les screen readers et Google ne savent pas identifier la langue.",
+    value: lang || undefined,
+    recommendation: !lang ? 'Ajoutez <html lang="fr"> (ou votre locale) pour l\'accessibilité et le SEO.' : undefined,
   });
+
+  // X-Robots-Tag header (override meta robots)
+  const xRobotsTag = headers.get("x-robots-tag");
+  if (xRobotsTag && /noindex/i.test(xRobotsTag)) {
+    checks.push({
+      id: "tech-x-robots-noindex",
+      category: "technical",
+      name: "X-Robots-Tag: noindex",
+      status: "fail",
+      severity: "critical",
+      description: `Le serveur envoie X-Robots-Tag: ${xRobotsTag}. Cette en-tête override la meta robots — la page NE SERA PAS indexée, quelle que soit la balise dans le HTML.`,
+      value: xRobotsTag,
+      recommendation: "Retirez cette en-tête de votre serveur (nginx : supprimez `add_header X-Robots-Tag`) ou limitez-la aux chemins `/admin/`.",
+    });
+  } else if (xRobotsTag) {
+    checks.push({
+      id: "tech-x-robots",
+      category: "technical",
+      name: "X-Robots-Tag",
+      status: "info",
+      description: `En-tête X-Robots-Tag présente : ${xRobotsTag}`,
+      value: xRobotsTag,
+    });
+  }
 
   return checks;
 }
 
 // =============================================================================
-// 2. ANALYSE ON-PAGE
+// 2. ON-PAGE CHECKS
 // =============================================================================
 
 function checkOnPage(
   html: string,
-  headings: { tag: string; text: string }[]
-): SeoCheck[] {
-  const checks: SeoCheck[] = [];
+  metas: { key: string; value: string }[],
+  headings: { tag: string; text: string }[],
+  internalLinkCount: number,
+  totalWords: number,
+  siteType: ReturnType<typeof detectSiteContext>["type"]
+): AuditCheck[] {
+  const checks: AuditCheck[] = [];
+  const policy = severityPolicyFor(siteType);
 
   // Title
-  const title = extractTag(html, "title");
+  const title = extractPageTitle(html);
   const titleLen = title ? title.length : 0;
-  const titleStatus = !title
-    ? "fail"
-    : titleLen < 30
-      ? "warn"
-      : titleLen > 60
-        ? "warn"
-        : "pass";
+  let titleStatus: AuditCheck["status"] = "pass";
+  let titleSev: AuditCheck["severity"];
+  if (!title) {
+    titleStatus = "fail";
+    titleSev = "critical";
+  } else if (titleLen < 25 || titleLen > 65) {
+    titleStatus = "warn";
+    titleSev = "medium";
+  }
   checks.push({
     id: "onpage-title",
     category: "onpage",
-    name: "Balise Title",
+    name: "Balise <title>",
     status: titleStatus,
-    severity: !title ? "critical" : titleStatus === "warn" ? "medium" : "info",
+    severity: titleSev,
     description: !title
-      ? "Aucune balise title detectee"
-      : `Title (${titleLen} caracteres) : "${title.substring(0, 80)}${title.length > 80 ? "..." : ""}"`,
+      ? "Balise <title> absente — Google utilisera un titre généré, souvent médiocre."
+      : `Title (${titleLen} caractères) : "${title.length > 80 ? title.substring(0, 80) + "…" : title}"`,
     value: title || "Absente",
-    recommendation: !title
-      ? "Ajoutez une balise <title> unique et optimisee (50-60 caracteres, mot-cle principal en debut)."
-      : titleLen < 30
-        ? "Title trop court. Visez 50-60 caracteres avec le mot-cle principal en debut."
-        : titleLen > 60
-          ? "Title trop long (risque de troncature dans les SERP). Limitez a 60 caracteres."
-          : undefined,
+    recommendation:
+      !title
+        ? "Ajoutez un <title> unique par page, 50-60 caractères, avec le mot-clé principal en début."
+        : titleLen < 25
+          ? "Titre trop court — visez 50-60 caractères."
+          : titleLen > 65
+            ? "Titre trop long — risque de troncature dans les SERP. Raccourcissez à 60 caractères."
+            : undefined,
   });
 
-  // Meta Description
-  const metaDesc = extractMeta(html, "description");
+  // Meta description
+  const metaDesc = getMetaContent(metas, "description");
   const descLen = metaDesc ? metaDesc.length : 0;
-  const descStatus = !metaDesc
-    ? "fail"
-    : descLen < 120
-      ? "warn"
-      : descLen > 160
-        ? "warn"
-        : "pass";
+  let descStatus: AuditCheck["status"] = "pass";
+  let descSev: AuditCheck["severity"];
+  if (!metaDesc) {
+    descStatus = "fail";
+    descSev = "high";
+  } else if (descLen < 110 || descLen > 170) {
+    descStatus = "warn";
+    descSev = "low";
+  }
   checks.push({
     id: "onpage-metadesc",
     category: "onpage",
-    name: "Meta Description",
+    name: "Meta description",
     status: descStatus,
-    severity: !metaDesc ? "high" : descStatus === "warn" ? "medium" : "info",
+    severity: descSev,
     description: !metaDesc
-      ? "Aucune meta description detectee"
-      : `Meta description (${descLen} caracteres)`,
-    value: metaDesc || "Absente",
+      ? "Meta description absente — Google génère un snippet depuis le contenu, souvent moins engageant."
+      : `Meta description (${descLen} caractères)`,
+    value: metaDesc || undefined,
     recommendation: !metaDesc
-      ? "Ajoutez une meta description attractive (120-160 caracteres) avec un CTA clair."
-      : descLen < 120
-        ? "Meta description trop courte. Visez 120-160 caracteres avec un appel a l'action."
-        : descLen > 160
-          ? "Meta description trop longue (risque de troncature). Limitez a 160 caracteres."
+      ? "Ajoutez une meta description 120-160 caractères avec un call-to-action clair."
+      : descLen < 110
+        ? "Description trop courte. Visez 120-160 caractères."
+        : descLen > 170
+          ? "Description trop longue — risque de troncature. Limitez à 160 caractères."
           : undefined,
   });
 
-  // H1 heading
+  // H1
   const h1s = headings.filter((h) => h.tag === "H1");
-  const h1Status = h1s.length === 1 ? "pass" : h1s.length === 0 ? "fail" : "warn";
+  let h1Status: AuditCheck["status"] = "pass";
+  let h1Sev: AuditCheck["severity"];
+  if (h1s.length === 0) {
+    h1Status = "fail";
+    h1Sev = "high";
+  } else if (h1s.length > policy.maxH1s.warn) {
+    h1Status = h1s.length > policy.maxH1s.fail ? "fail" : "warn";
+    h1Sev = "medium";
+  }
   checks.push({
     id: "onpage-h1",
     category: "onpage",
     name: "Balise H1",
     status: h1Status,
-    severity: h1s.length === 0 ? "high" : h1Status === "warn" ? "medium" : "info",
+    severity: h1Sev,
     description:
       h1s.length === 0
-        ? "Aucune balise H1 detectee"
+        ? "Aucune balise H1 détectée."
         : h1s.length === 1
-          ? `H1 : "${h1s[0].text.substring(0, 80)}"`
-          : `${h1s.length} balises H1 detectees (une seule recommandee)`,
-    value: h1s.map((h) => h.text).join(" | ") || "Absente",
+          ? `H1 unique : "${h1s[0].text.substring(0, 80)}"`
+          : `${h1s.length} balises H1 détectées — HTML5 l'autorise mais une seule reste la meilleure pratique SEO.`,
+    value: h1s.map((h) => h.text).slice(0, 3).join(" | "),
     recommendation:
       h1s.length === 0
-        ? "Ajoutez une balise H1 unique contenant le mot-cle principal."
+        ? "Ajoutez un H1 unique contenant le mot-clé principal."
         : h1s.length > 1
-          ? "Gardez une seule H1 par page. Les autres titres doivent etre H2, H3, etc."
+          ? "Gardez un seul H1 par page pour un signal clair au moteur."
           : undefined,
   });
 
-  // Heading structure
-  const headingTags = headings.map((h) => h.tag);
-  const hasLogicalStructure =
-    headingTags.length > 0 &&
-    headingTags[0] === "H1" &&
-    !headingTags.some((tag, i) => {
-      if (i === 0) return false;
-      const prev = parseInt(headingTags[i - 1].replace("H", ""));
-      const curr = parseInt(tag.replace("H", ""));
-      return curr > prev + 1;
+  // Heading hierarchy
+  const tagSeq = headings.map((h) => parseInt(h.tag.replace("H", "")));
+  const hasSkip = tagSeq.some((cur, i) => i > 0 && cur > tagSeq[i - 1] + 1);
+  if (headings.length > 0) {
+    checks.push({
+      id: "onpage-heading-structure",
+      category: "onpage",
+      name: "Hiérarchie des titres (Hn)",
+      status: hasSkip ? "warn" : "pass",
+      severity: hasSkip ? "low" : undefined,
+      description: hasSkip
+        ? "Des sauts de niveau ont été détectés (ex : H1 → H3 sans H2). Impact mineur sur le SEO mais négatif pour l'accessibilité."
+        : `Hiérarchie cohérente (${headings.length} titres).`,
+      value: headings.slice(0, 8).map((h) => h.tag).join(" > "),
     });
-  checks.push({
-    id: "onpage-heading-structure",
-    category: "onpage",
-    name: "Structure des titres (Hn)",
-    status: headings.length === 0 ? "fail" : hasLogicalStructure ? "pass" : "warn",
-    severity: headings.length === 0 ? "high" : hasLogicalStructure ? "info" : "medium",
-    description:
-      headings.length === 0
-        ? "Aucun titre detecte"
-        : hasLogicalStructure
-          ? `Structure logique : ${headingTags.slice(0, 10).join(" > ")}${headingTags.length > 10 ? "..." : ""}`
-          : `Structure non optimale : ${headingTags.slice(0, 10).join(" > ")}`,
-    value: `${headings.length} titres detectes`,
-    recommendation:
-      headings.length === 0
-        ? "Ajoutez des titres H1-H6 pour structurer votre contenu."
-        : !hasLogicalStructure
-          ? "Respectez la hierarchie H1 > H2 > H3... sans sauter de niveaux."
-          : undefined,
-  });
-
-  // Images - alt text
-  const imgTags = html.match(/<img[^>]*>/gi) || [];
-  const imgsWithAlt = imgTags.filter((img) => /alt=["'][^"']+["']/i.test(img));
-  const imgsWithoutAlt = imgTags.length - imgsWithAlt.length;
-  const imgStatus =
-    imgTags.length === 0
-      ? "info"
-      : imgsWithoutAlt === 0
-        ? "pass"
-        : imgsWithoutAlt <= 2
-          ? "warn"
-          : "fail";
-  checks.push({
-    id: "onpage-img-alt",
-    category: "onpage",
-    name: "Images — Attributs Alt",
-    status: imgStatus,
-    severity: imgStatus === "fail" ? "high" : imgStatus === "warn" ? "medium" : "info",
-    description:
-      imgTags.length === 0
-        ? "Aucune image detectee"
-        : imgsWithoutAlt === 0
-          ? `Toutes les images (${imgTags.length}) ont un attribut alt`
-          : `${imgsWithoutAlt}/${imgTags.length} images sans attribut alt`,
-    value: `${imgsWithAlt.length}/${imgTags.length} avec alt`,
-    recommendation:
-      imgsWithoutAlt > 0
-        ? "Ajoutez des attributs alt descriptifs a toutes les images pour le SEO et l'accessibilite."
-        : undefined,
-  });
-
-  // Image formats (WebP/AVIF detection)
-  const imgSrcs = extractAllAttributes(html, "img", "src");
-  const modernFormats = imgSrcs.filter((s) => /\.(webp|avif)/i.test(s) || /\/_next\/image/i.test(s));
-  const hasModernFormats = modernFormats.length > 0 || imgSrcs.length === 0;
-  checks.push({
-    id: "onpage-img-format",
-    category: "onpage",
-    name: "Images — Formats modernes",
-    status: imgSrcs.length === 0 ? "info" : hasModernFormats ? "pass" : "warn",
-    severity: imgSrcs.length === 0 ? "info" : hasModernFormats ? "info" : "low",
-    description:
-      imgSrcs.length === 0
-        ? "Aucune image detectee"
-        : hasModernFormats
-          ? `${modernFormats.length}/${imgSrcs.length} images en format moderne (WebP/AVIF)`
-          : "Aucune image en format WebP ou AVIF detectee",
-    value: `${modernFormats.length}/${imgSrcs.length}`,
-    recommendation: !hasModernFormats
-      ? "Utilisez des formats WebP ou AVIF pour reduire la taille des images (30-50% de gain)."
-      : undefined,
-  });
-
-  // Internal & external links
-  const allLinks = html.match(/<a[^>]*href=["']([^"']*)["'][^>]*>/gi) || [];
-  const hrefs = extractAllAttributes(html, "a", "href");
-  const origin = (() => {
-    try {
-      // We don't have the URL here, so approximate
-      return "";
-    } catch {
-      return "";
-    }
-  })();
-  const internalLinks = hrefs.filter(
-    (h) => h.startsWith("/") || h.startsWith("#") || h.startsWith("./")
-  );
-  const externalLinks = hrefs.filter((h) => /^https?:\/\//i.test(h));
-  checks.push({
-    id: "onpage-links",
-    category: "onpage",
-    name: "Maillage interne & liens externes",
-    status: internalLinks.length > 3 ? "pass" : internalLinks.length > 0 ? "warn" : "fail",
-    severity: internalLinks.length === 0 ? "high" : internalLinks.length <= 3 ? "medium" : "info",
-    description: `${internalLinks.length} liens internes, ${externalLinks.length} liens externes`,
-    value: `Internes: ${internalLinks.length} | Externes: ${externalLinks.length}`,
-    recommendation:
-      internalLinks.length <= 3
-        ? "Renforcez votre maillage interne. Ajoutez des liens vers vos pages importantes."
-        : undefined,
-  });
-
-  // Open Graph tags
-  const ogTitle = extractMeta(html, "og:title");
-  const ogDesc = extractMeta(html, "og:description");
-  const ogImage = extractMeta(html, "og:image");
-  const ogCount = [ogTitle, ogDesc, ogImage].filter(Boolean).length;
-  checks.push({
-    id: "onpage-og",
-    category: "onpage",
-    name: "Open Graph (reseaux sociaux)",
-    status: ogCount === 3 ? "pass" : ogCount > 0 ? "warn" : "fail",
-    severity: ogCount === 0 ? "medium" : ogCount < 3 ? "low" : "info",
-    description:
-      ogCount === 3
-        ? "Balises Open Graph completes (title, description, image)"
-        : ogCount > 0
-          ? `Open Graph partiel : ${ogCount}/3 balises presentes`
-          : "Aucune balise Open Graph detectee",
-    value: `og:title=${ogTitle ? "oui" : "non"}, og:description=${ogDesc ? "oui" : "non"}, og:image=${ogImage ? "oui" : "non"}`,
-    recommendation:
-      ogCount < 3
-        ? "Ajoutez og:title, og:description et og:image pour optimiser le partage sur les reseaux sociaux."
-        : undefined,
-  });
-
-  // Twitter Cards
-  const twitterCard = extractMeta(html, "twitter:card");
-  const twitterTitle = extractMeta(html, "twitter:title");
-  checks.push({
-    id: "onpage-twitter",
-    category: "onpage",
-    name: "Twitter Cards",
-    status: twitterCard ? "pass" : "warn",
-    severity: twitterCard ? "info" : "low",
-    description: twitterCard
-      ? `Twitter Card : ${twitterCard}`
-      : "Aucune balise Twitter Card detectee",
-    value: twitterCard || "Absente",
-    recommendation: !twitterCard
-      ? "Ajoutez twitter:card et twitter:title pour un meilleur affichage sur Twitter/X."
-      : undefined,
-  });
+  }
 
   // Meta robots
-  const metaRobots = extractMeta(html, "robots");
+  const metaRobots = getMetaContent(metas, "robots");
   const isNoindex = metaRobots && /noindex/i.test(metaRobots);
   const isNofollow = metaRobots && /nofollow/i.test(metaRobots);
-  checks.push({
-    id: "onpage-meta-robots",
-    category: "onpage",
-    name: "Meta Robots",
-    status: isNoindex ? "fail" : isNofollow ? "warn" : "pass",
-    severity: isNoindex ? "critical" : isNofollow ? "high" : "info",
-    description: metaRobots
-      ? `Meta robots : ${metaRobots}`
-      : "Aucune meta robots (indexation par defaut)",
-    value: metaRobots || "Non definie (index, follow par defaut)",
-    recommendation: isNoindex
-      ? "ATTENTION : La page est en noindex ! Elle ne sera pas indexee par Google."
-      : isNofollow
-        ? "La directive nofollow empeche le suivi des liens. Verifiez si c'est intentionnel."
-        : undefined,
-  });
+  if (isNoindex) {
+    checks.push({
+      id: "onpage-meta-robots",
+      category: "onpage",
+      name: "Meta robots : noindex",
+      status: "fail",
+      severity: "critical",
+      description: `La page est en noindex : "${metaRobots}". Elle ne sera JAMAIS indexée par Google.`,
+      value: metaRobots,
+      recommendation: "Retirez `noindex` de la meta robots si vous souhaitez apparaître dans les SERP.",
+    });
+  } else if (isNofollow) {
+    checks.push({
+      id: "onpage-meta-robots",
+      category: "onpage",
+      name: "Meta robots : nofollow",
+      status: "warn",
+      severity: "medium",
+      description: `Meta robots = "${metaRobots}". Les liens de la page ne transmettent pas de PageRank.`,
+      value: metaRobots,
+      recommendation: "Vérifiez que `nofollow` est intentionnel (page de login, utilisateur, etc.).",
+    });
+  } else if (metaRobots) {
+    checks.push({
+      id: "onpage-meta-robots",
+      category: "onpage",
+      name: "Meta robots",
+      status: "pass",
+      description: `Meta robots : "${metaRobots}".`,
+      value: metaRobots,
+    });
+  }
 
-  // Content length
-  const textContent = html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const wordCount = textContent.split(/\s+/).length;
-  const contentStatus = wordCount > 300 ? "pass" : wordCount > 100 ? "warn" : "fail";
+  // Content length — context-aware
+  let contentStatus: AuditCheck["status"] = "pass";
+  let contentSev: AuditCheck["severity"];
+  if (totalWords < policy.minWordCount.fail) {
+    contentStatus = "fail";
+    contentSev = "high";
+  } else if (totalWords < policy.minWordCount.warn) {
+    contentStatus = "warn";
+    contentSev = "medium";
+  }
   checks.push({
     id: "onpage-content-length",
     category: "onpage",
     name: "Longueur du contenu",
     status: contentStatus,
-    severity: contentStatus === "fail" ? "high" : contentStatus === "warn" ? "medium" : "info",
-    description: `Environ ${wordCount} mots de contenu textuel`,
-    value: `~${wordCount} mots`,
+    severity: contentSev,
+    description: `~${totalWords} mots détectés. Attendu pour ce type de site (${siteType}) : min ${policy.minWordCount.warn} mots.`,
+    value: `${totalWords} mots`,
     recommendation:
-      wordCount < 300
-        ? "Contenu trop fin. Visez minimum 300 mots pour les pages cles (800-1500 pour un article)."
+      contentStatus !== "pass"
+        ? "Enrichissez le contenu avec des exemples concrets, des cas clients, des comparatifs. Minimum 600-800 mots pour un article SEO."
         : undefined,
   });
+
+  // Internal links — context-aware
+  let linksStatus: AuditCheck["status"] = "pass";
+  let linksSev: AuditCheck["severity"];
+  if (internalLinkCount < policy.minInternalLinks.fail) {
+    linksStatus = "fail";
+    linksSev = "high";
+  } else if (internalLinkCount < policy.minInternalLinks.warn) {
+    linksStatus = "warn";
+    linksSev = "low";
+  }
+  checks.push({
+    id: "onpage-internal-links",
+    category: "onpage",
+    name: "Maillage interne",
+    status: linksStatus,
+    severity: linksSev,
+    description: `${internalLinkCount} lien(s) interne(s) détecté(s).`,
+    value: `${internalLinkCount} liens`,
+    recommendation:
+      linksStatus !== "pass"
+        ? "Ajoutez des liens contextuels vers vos autres pages (cluster thématique, maillage des piliers)."
+        : undefined,
+  });
+
+  // Open Graph completeness (title/description/image — image validated separately)
+  const ogTitle = getMetaContent(metas, "og:title");
+  const ogDesc = getMetaContent(metas, "og:description");
+  const ogImage = getMetaContent(metas, "og:image");
+  const ogCount = [ogTitle, ogDesc, ogImage].filter(Boolean).length;
+  if (ogCount < 3) {
+    checks.push({
+      id: "onpage-og",
+      category: "onpage",
+      name: "Open Graph (partage social)",
+      status: ogCount === 0 ? "warn" : "info",
+      severity: ogCount === 0 ? "low" : undefined,
+      description: `Open Graph : ${ogCount}/3 balises essentielles présentes (og:title, og:description, og:image).`,
+      value: `og:title=${ogTitle ? "✓" : "✗"} og:description=${ogDesc ? "✓" : "✗"} og:image=${ogImage ? "✓" : "✗"}`,
+      recommendation: "Complétez les 3 balises OG pour soigner l'apparence sur Facebook, LinkedIn, Discord, Slack, etc.",
+    });
+  }
+
+  // Twitter Card
+  const twitterCard = getMetaContent(metas, "twitter:card");
+  if (!twitterCard) {
+    checks.push({
+      id: "onpage-twitter",
+      category: "onpage",
+      name: "Twitter Card",
+      status: "info",
+      description: "Aucune balise twitter:card. Twitter/X utilisera les balises OG en fallback.",
+      recommendation: "Optionnel : ajoutez <meta name=\"twitter:card\" content=\"summary_large_image\"> pour une apparence optimale sur X.",
+    });
+  }
+
+  // Images alt — ignore decorative
+  const imgs = parseImgTags(html);
+  const meaningful = imgs.filter((i) => !i.decorative);
+  const withAlt = meaningful.filter((i) => i.alt && i.alt.trim().length >= 3);
+  const missingAlt = meaningful.length - withAlt.length;
+  if (meaningful.length > 0) {
+    let imgStatus: AuditCheck["status"] = "pass";
+    let imgSev: AuditCheck["severity"];
+    if (missingAlt > 0 && missingAlt >= meaningful.length * 0.3) {
+      imgStatus = "fail";
+      imgSev = "high";
+    } else if (missingAlt > 0) {
+      imgStatus = "warn";
+      imgSev = "medium";
+    }
+    checks.push({
+      id: "onpage-img-alt",
+      category: "onpage",
+      name: "Attribut alt des images",
+      status: imgStatus,
+      severity: imgSev,
+      description:
+        missingAlt === 0
+          ? `Toutes les ${meaningful.length} images porteuses ont un alt descriptif.`
+          : `${missingAlt}/${meaningful.length} images porteuses sans alt (hors décoratives).`,
+      value: `${withAlt.length}/${meaningful.length}`,
+      recommendation:
+        missingAlt > 0
+          ? "Ajoutez un attribut alt descriptif à chaque image porteuse de sens. Utilisez alt=\"\" pour les décoratives."
+          : undefined,
+    });
+  }
+
+  // Modern image formats
+  if (imgs.length > 0) {
+    const modern = imgs.filter((i) => /\.(webp|avif)/i.test(i.src) || i.fromNextImage);
+    const ratio = modern.length / imgs.length;
+    if (ratio < 0.5) {
+      checks.push({
+        id: "onpage-img-format",
+        category: "onpage",
+        name: "Formats modernes (WebP/AVIF)",
+        status: "info",
+        description: `${modern.length}/${imgs.length} images en format moderne. Les formats legacy (JPG/PNG) pèsent 30-50 % de plus.`,
+        recommendation: "Convertissez vos images en WebP ou servez-les via next/image, Cloudflare Images, etc.",
+      });
+    }
+  }
+
+  // CLS prevention — width/height sur images
+  const imgsWithoutDims = imgs.filter((i) => !i.fromNextImage && (!i.width || !i.height));
+  if (imgs.length > 3 && imgsWithoutDims.length / imgs.length > 0.5) {
+    checks.push({
+      id: "onpage-img-dimensions",
+      category: "onpage",
+      name: "Images sans dimensions",
+      status: "warn",
+      severity: "low",
+      description: `${imgsWithoutDims.length}/${imgs.length} images sans width+height. Impact sur le Cumulative Layout Shift (CLS).`,
+      recommendation: "Ajoutez width et height explicites pour réserver l'espace avant le chargement — améliore le score CLS.",
+    });
+  }
 
   return checks;
 }
 
 // =============================================================================
-// 3. ANALYSE PERFORMANCE
+// 3. PERFORMANCE CHECKS
 // =============================================================================
 
-function checkPerformance(html: string, headers: Headers, responseTime: number, pageSize: number): SeoCheck[] {
-  const checks: SeoCheck[] = [];
+function checkPerformance(html: string): AuditCheck[] {
+  const checks: AuditCheck[] = [];
+  const cleanedHtml = stripScriptsAndStyles(html);
 
-  // Render-blocking resources
-  const blockingCss = (html.match(/<link[^>]*rel=["']stylesheet["'][^>]*>/gi) || [])
-    .filter((s) => !/data-precedence|media=["']print["']/i.test(s)).length;
-  const blockingJs = (
-    html.match(/<script[^>]*src=["'][^"']*["'][^>]*>/gi) || []
-  ).filter((s) => !/async|defer|nomodule/i.test(s)).length;
-  const blockingStatus = blockingCss + blockingJs === 0 ? "pass" : blockingCss + blockingJs <= 3 ? "warn" : "fail";
-  checks.push({
-    id: "perf-render-blocking",
-    category: "performance",
-    name: "Ressources bloquantes (render-blocking)",
-    status: blockingStatus,
-    severity: blockingStatus === "fail" ? "high" : blockingStatus === "warn" ? "medium" : "info",
-    description: `${blockingCss} CSS + ${blockingJs} JS bloquants detectes`,
-    value: `CSS: ${blockingCss}, JS sync: ${blockingJs}`,
-    recommendation:
-      blockingCss + blockingJs > 0
-        ? "Ajoutez async/defer aux scripts et envisagez le critical CSS inline pour le above-the-fold."
-        : undefined,
-  });
+  // Render-blocking CSS — detect <link rel="stylesheet"> without media="print"
+  const blockingCss = (html.match(/<link\b[^>]+rel\s*=\s*["']stylesheet["'][^>]*>/gi) || []).filter(
+    (tag) => !/media\s*=\s*["'](?:print|speech)["']/i.test(tag)
+  ).length;
+  // Render-blocking JS — <script src="…"> without async/defer/type=module
+  const scriptsWithSrc = html.match(/<script\b[^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*>/gi) || [];
+  const blockingJs = scriptsWithSrc.filter(
+    (tag) => !/\b(async|defer|type\s*=\s*["']module["']|nomodule)\b/i.test(tag)
+  ).length;
+  const blockingTotal = blockingCss + blockingJs;
+  if (blockingTotal > 0) {
+    const status: AuditCheck["status"] = blockingTotal > 5 ? "fail" : blockingTotal > 2 ? "warn" : "info";
+    const severity: AuditCheck["severity"] = status === "fail" ? "high" : status === "warn" ? "medium" : undefined;
+    checks.push({
+      id: "perf-render-blocking",
+      category: "performance",
+      name: "Ressources render-blocking",
+      status,
+      severity,
+      description: `${blockingCss} CSS + ${blockingJs} JS bloquent le first paint.`,
+      value: `CSS: ${blockingCss} | JS: ${blockingJs}`,
+      recommendation: "Ajoutez async/defer aux scripts et inlinez le critical CSS above-the-fold.",
+    });
+  } else {
+    checks.push({
+      id: "perf-render-blocking",
+      category: "performance",
+      name: "Ressources render-blocking",
+      status: "pass",
+      description: "Aucune ressource bloquante détectée.",
+    });
+  }
 
-  // Lazy loading images
-  const allImgs = html.match(/<img[^>]*>/gi) || [];
-  const lazyImgs = allImgs.filter((img) => /loading=["']lazy["']/i.test(img));
-  const lazyStatus =
-    allImgs.length === 0 ? "info" : lazyImgs.length >= allImgs.length / 2 ? "pass" : "warn";
-  checks.push({
-    id: "perf-lazy-loading",
-    category: "performance",
-    name: "Lazy Loading des images",
-    status: lazyStatus,
-    severity: lazyStatus === "warn" ? "low" : "info",
-    description:
-      allImgs.length === 0
-        ? "Aucune image detectee"
-        : `${lazyImgs.length}/${allImgs.length} images avec lazy loading`,
-    value: `${lazyImgs.length}/${allImgs.length}`,
-    recommendation:
-      lazyStatus === "warn"
-        ? "Ajoutez loading='lazy' aux images below-the-fold pour ameliorer le LCP."
-        : undefined,
-  });
+  // Lazy loading — only on non-LCP images (above-the-fold should NOT be lazy)
+  const allImgs = html.match(/<img\b[^>]*>/gi) || [];
+  const lazyImgs = allImgs.filter((t) => /loading\s*=\s*["']lazy["']/i.test(t));
+  if (allImgs.length > 5 && lazyImgs.length < allImgs.length * 0.5) {
+    checks.push({
+      id: "perf-lazy-loading",
+      category: "performance",
+      name: "Lazy loading des images",
+      status: "info",
+      description: `${lazyImgs.length}/${allImgs.length} images avec loading="lazy". L'image LCP (above-the-fold) ne doit PAS être lazy.`,
+      recommendation: "Marquez lazy toutes les images sous le fold (`loading=\"lazy\"`), et priority (`fetchpriority=\"high\"`) pour l'image hero.",
+    });
+  }
 
-  // Inline CSS size
-  const inlineStyles = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
-  const inlineCssSize = inlineStyles.reduce((acc, s) => acc + s.length, 0);
-  const inlineCssKB = Math.round(inlineCssSize / 1024);
-  checks.push({
-    id: "perf-inline-css",
-    category: "performance",
-    name: "CSS inline",
-    status: inlineCssKB > 50 ? "warn" : "pass",
-    severity: inlineCssKB > 50 ? "low" : "info",
-    description: `${inlineCssKB} KB de CSS inline (${inlineStyles.length} blocs)`,
-    value: `${inlineCssKB} KB`,
-    recommendation:
-      inlineCssKB > 50
-        ? "Trop de CSS inline. Externalisez le CSS non-critique pour ameliorer le cache."
-        : undefined,
-  });
-
-  // Preconnect / DNS prefetch
-  const hasPreconnect = /rel=["'](preconnect|dns-prefetch)["']/i.test(html);
-  checks.push({
-    id: "perf-preconnect",
-    category: "performance",
-    name: "Preconnect / DNS Prefetch",
-    status: hasPreconnect ? "pass" : "info",
-    severity: "info",
-    description: hasPreconnect
-      ? "Preconnect ou DNS prefetch detectes"
-      : "Aucun preconnect ou dns-prefetch detecte",
-    recommendation: !hasPreconnect
-      ? "Ajoutez <link rel='preconnect'> pour les domaines tiers frequents (fonts, CDN, analytics)."
-      : undefined,
-  });
-
-  // Resource hints (preload)
-  const hasPreload = /rel=["']preload["']/i.test(html);
-  checks.push({
-    id: "perf-preload",
-    category: "performance",
-    name: "Preload de ressources critiques",
-    status: hasPreload ? "pass" : "info",
-    severity: "info",
-    description: hasPreload
-      ? "Preload detecte pour ressources critiques"
-      : "Aucun preload detecte",
-    recommendation: !hasPreload
-      ? "Utilisez <link rel='preload'> pour les fonts, images hero et CSS critiques."
-      : undefined,
-  });
+  // Resource hints
+  const hasPreconnect = /rel\s*=\s*["'](?:preconnect|dns-prefetch)["']/i.test(cleanedHtml);
+  const hasPreload = /rel\s*=\s*["']preload["']/i.test(cleanedHtml);
+  if (!hasPreconnect && !hasPreload) {
+    checks.push({
+      id: "perf-resource-hints",
+      category: "performance",
+      name: "Resource hints (preconnect, preload)",
+      status: "info",
+      description: "Aucun preconnect/preload détecté. Hints optionnels mais améliorent le LCP sur sites avec CDN/fonts tiers.",
+      recommendation: "Ajoutez <link rel=\"preconnect\" href=\"https://cdn.exemple.com\"> pour vos domaines tiers critiques.",
+    });
+  }
 
   return checks;
 }
 
 // =============================================================================
-// 4. ANALYSE OFF-PAGE (checks limites cote serveur)
+// 4. OFF-PAGE / E-E-A-T CHECKS
 // =============================================================================
 
-async function checkOffPage(targetUrl: string, html: string): Promise<SeoCheck[]> {
-  const checks: SeoCheck[] = [];
-  const baseUrl = new URL(targetUrl);
+function checkOffPage(html: string, _metas: { key: string; value: string }[], links: ReturnType<typeof parseLinkTags>): AuditCheck[] {
+  void _metas;
+  const checks: AuditCheck[] = [];
 
   // Favicon
-  const hasFavicon =
-    /rel=["'](icon|shortcut icon|apple-touch-icon)["']/i.test(html);
+  const favicon = links.find((l) =>
+    /\b(icon|shortcut icon|apple-touch-icon)\b/i.test(l.rel)
+  );
   checks.push({
     id: "offpage-favicon",
     category: "offpage",
     name: "Favicon",
-    status: hasFavicon ? "pass" : "warn",
-    severity: hasFavicon ? "info" : "low",
-    description: hasFavicon ? "Favicon detecte" : "Aucun favicon detecte",
-    recommendation: !hasFavicon
-      ? "Ajoutez un favicon pour la reconnaissance de marque dans les onglets et les SERP."
-      : undefined,
+    status: favicon ? "pass" : "info",
+    description: favicon ? "Favicon défini." : "Aucun favicon détecté. Impact mineur mais visible dans les onglets et les SERP.",
+    recommendation: !favicon ? `Ajoutez <link rel="icon" href="/favicon.ico">` : undefined,
   });
 
-  // Social presence indicators
+  // Social presence — detect profile links in actual href (not just text mentions)
   const socialPatterns = [
-    { name: "Facebook", pattern: /facebook\.com|fb\.com/i },
-    { name: "Twitter/X", pattern: /twitter\.com|x\.com/i },
-    { name: "LinkedIn", pattern: /linkedin\.com/i },
-    { name: "Instagram", pattern: /instagram\.com/i },
-    { name: "YouTube", pattern: /youtube\.com/i },
+    { name: "Facebook", re: /<a\b[^>]+href=["'][^"']*(?:facebook\.com|fb\.com)\//i },
+    { name: "Twitter/X", re: /<a\b[^>]+href=["'][^"']*(?:twitter\.com|x\.com)\//i },
+    { name: "LinkedIn", re: /<a\b[^>]+href=["'][^"']*linkedin\.com\//i },
+    { name: "Instagram", re: /<a\b[^>]+href=["'][^"']*instagram\.com\//i },
+    { name: "YouTube", re: /<a\b[^>]+href=["'][^"']*youtube\.com\//i },
+    { name: "TikTok", re: /<a\b[^>]+href=["'][^"']*tiktok\.com\//i },
   ];
-  const foundSocials = socialPatterns.filter((s) => s.pattern.test(html)).map((s) => s.name);
+  const found = socialPatterns.filter((p) => p.re.test(html)).map((p) => p.name);
   checks.push({
     id: "offpage-social",
     category: "offpage",
-    name: "Presence reseaux sociaux",
-    status: foundSocials.length >= 2 ? "pass" : foundSocials.length > 0 ? "warn" : "info",
-    severity: "info",
+    name: "Liens vers profils sociaux",
+    status: found.length >= 2 ? "pass" : "info",
     description:
-      foundSocials.length > 0
-        ? `Liens detectes : ${foundSocials.join(", ")}`
-        : "Aucun lien vers les reseaux sociaux detecte",
-    value: foundSocials.join(", ") || "Aucun",
+      found.length > 0
+        ? `Profils sociaux détectés : ${found.join(", ")}.`
+        : "Aucun lien vers des profils sociaux détecté.",
+    value: found.join(", ") || undefined,
     recommendation:
-      foundSocials.length < 2
-        ? "Ajoutez des liens vers vos profils sociaux pour renforcer votre presence en ligne (E-E-A-T)."
+      found.length < 2
+        ? "Ajoutez des liens vers vos profils sociaux officiels pour renforcer l'E-E-A-T."
         : undefined,
   });
 
-  // SSL certificate info
-  const isHttps = targetUrl.startsWith("https");
-  checks.push({
-    id: "offpage-ssl",
-    category: "offpage",
-    name: "Certificat SSL",
-    status: isHttps ? "pass" : "fail",
-    severity: isHttps ? "info" : "critical",
-    description: isHttps
-      ? "Connexion securisee (HTTPS)"
-      : "Pas de HTTPS — impact negatif sur le SEO et la confiance",
-    recommendation: !isHttps
-      ? "Installez un certificat SSL (Let's Encrypt gratuit) — facteur de ranking Google."
-      : undefined,
-  });
-
-  // Check for analytics (scripts, preconnect hints, data attributes)
+  // Analytics
   const hasAnalytics =
-    /google-analytics|gtag|googletagmanager|umami|matomo|plausible|fathom|analytics\.[a-z0-9-]+\.[a-z]{2,}/i.test(html);
+    /google-analytics\.com|\bgtag\s*\(|googletagmanager\.com\/gtm|umami|matomo|plausible|fathom/i.test(html);
   checks.push({
     id: "offpage-analytics",
     category: "offpage",
     name: "Outil d'analytics",
-    status: hasAnalytics ? "pass" : "warn",
-    severity: hasAnalytics ? "info" : "medium",
+    status: hasAnalytics ? "pass" : "info",
     description: hasAnalytics
-      ? "Outil d'analytics detecte"
-      : "Aucun outil d'analytics detecte",
+      ? "Un outil d'analytics a été détecté."
+      : "Aucun outil d'analytics détecté. Impossible de mesurer votre ROI SEO.",
     recommendation: !hasAnalytics
-      ? "Installez un outil d'analytics (GA4, Umami, Plausible) pour suivre vos KPIs SEO."
+      ? "Installez un outil : GA4, Plausible ou Umami (RGPD-friendly)."
+      : undefined,
+  });
+
+  // Author schema / E-E-A-T signals
+  const hasAuthorSchema =
+    /"@type"\s*:\s*"(?:Person|Author)"/i.test(html) ||
+    /itemprop\s*=\s*["']author["']/i.test(html);
+  checks.push({
+    id: "offpage-eeat",
+    category: "offpage",
+    name: "Signal E-E-A-T (auteur identifié)",
+    status: hasAuthorSchema ? "pass" : "info",
+    description: hasAuthorSchema
+      ? "Un auteur structuré est référencé (Schema Person ou itemprop author)."
+      : "Aucun auteur identifié structurellement. Important pour YMYL (finance, santé) et Helpful Content.",
+    recommendation: !hasAuthorSchema
+      ? "Ajoutez Schema Person sur les pages d'auteur et liez-les via Schema Article > author."
       : undefined,
   });
 
@@ -889,57 +820,70 @@ async function checkOffPage(targetUrl: string, html: string): Promise<SeoCheck[]
 }
 
 // =============================================================================
-// SCORE CALCULATION
+// SCORE CALCULATION (normalised)
 // =============================================================================
 
-function calculateScore(checks: SeoCheck[]): { score: number; grade: string } {
-  let score = 100;
-
-  for (const check of checks) {
-    if (check.status === "fail") {
-      switch (check.severity) {
-        case "critical":
-          score -= 15;
-          break;
-        case "high":
-          score -= 10;
-          break;
-        case "medium":
-          score -= 5;
-          break;
-        case "low":
-          score -= 2;
-          break;
-      }
-    } else if (check.status === "warn") {
-      switch (check.severity) {
-        case "critical":
-          score -= 8;
-          break;
-        case "high":
-          score -= 5;
-          break;
-        case "medium":
-          score -= 3;
-          break;
-        case "low":
-          score -= 1;
-          break;
-      }
-    }
+function scoreFromChecks(checks: AuditCheck[]): { score: number; grade: string } {
+  // Scoring is count-based and normalised (same algorithm as security audit):
+  // pass = 1, warn = 0.4, fail = 0, info ignored. score = avg × 100.
+  const scorable = checks.filter((c) => c.status !== "info");
+  if (scorable.length === 0) return { score: 100, grade: "A+" };
+  let total = 0;
+  for (const c of scorable) {
+    if (c.status === "pass") total += 1;
+    else if (c.status === "warn") total += 0.4;
   }
-
-  score = Math.max(0, Math.min(100, score));
-
-  let grade: string;
-  if (score >= 90) grade = "A+";
-  else if (score >= 80) grade = "A";
-  else if (score >= 70) grade = "B";
-  else if (score >= 55) grade = "C";
+  const score = Math.round((total / scorable.length) * 100);
+  let grade = "F";
+  if (score >= 95) grade = "A+";
+  else if (score >= 85) grade = "A";
+  else if (score >= 75) grade = "B";
+  else if (score >= 60) grade = "C";
   else if (score >= 40) grade = "D";
-  else grade = "F";
-
   return { score, grade };
+}
+
+const categoryLabels: Record<string, string> = {
+  technical: "Technique",
+  onpage: "On-Page",
+  performance: "Performance",
+  offpage: "Off-Page / E-E-A-T",
+  headers: "En-têtes",
+  infra: "Infrastructure",
+};
+
+function calculateScore(checks: AuditCheck[]): {
+  score: number;
+  grade: string;
+  status: AuditStatus;
+  categoryScores: CategoryScore[];
+} {
+  const { score, grade } = scoreFromChecks(checks);
+  const categories = [...new Set(checks.map((c) => c.category))];
+  const categoryScores: CategoryScore[] = categories.map((cat) => {
+    const catChecks = checks.filter((c) => c.category === cat);
+    const scorable = catChecks.filter((c) => c.status !== "info");
+    const { score: catScore, grade: catGrade } = scoreFromChecks(catChecks);
+    return {
+      category: cat,
+      label: categoryLabels[cat] || cat,
+      score: catScore,
+      grade: catGrade,
+      total: scorable.length,
+      passed: scorable.filter((c) => c.status === "pass").length,
+      warned: scorable.filter((c) => c.status === "warn").length,
+      failed: scorable.filter((c) => c.status === "fail").length,
+    };
+  });
+
+  const hasCritical = checks.some((c) => c.severity === "critical" && c.status === "fail");
+  const hasHigh = checks.some((c) => c.severity === "high" && c.status === "fail");
+  let status: AuditStatus = "production-ready";
+  if (hasCritical) status = "critical";
+  else if (hasHigh) status = "at-risk";
+  else if (score < 75) status = "needs-fixes";
+
+  return { score, grade, status, categoryScores };
 }
 
 // =============================================================================
@@ -950,50 +894,26 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     let { url } = body;
-
     if (!url || typeof url !== "string") {
       return NextResponse.json({ error: "URL requise" }, { status: 400 });
     }
-
-    // Normalize URL
     url = url.trim();
-    if (!/^https?:\/\//i.test(url)) {
-      url = `https://${url}`;
+    if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+    if (!isValidHttpUrl(url)) {
+      return NextResponse.json({ error: "URL invalide ou interdite" }, { status: 400 });
     }
 
-    // Validate URL
-    let targetUrl: URL;
-    try {
-      targetUrl = new URL(url);
-    } catch {
-      return NextResponse.json({ error: "URL invalide" }, { status: 400 });
-    }
-
-    // Block private IPs / localhost
-    const hostname = targetUrl.hostname;
-    if (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname.startsWith("192.168.") ||
-      hostname.startsWith("10.") ||
-      hostname.startsWith("172.") ||
-      hostname === "0.0.0.0"
-    ) {
-      return NextResponse.json(
-        { error: "Les adresses locales/privees ne sont pas autorisees" },
-        { status: 400 }
-      );
-    }
-
-    const isHttps = targetUrl.protocol === "https:";
+    const targetUrl = url;
+    const parsedUrl = new URL(targetUrl);
+    const origin = parsedUrl.origin;
+    const isHttps = parsedUrl.protocol === "https:";
 
     // Fetch the page
     const startTime = Date.now();
-    const response = await safeFetch(targetUrl.toString(), {
+    const response = await safeFetch(targetUrl, {
       timeout: 15000,
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; SEOAuditBot/1.0; +https://thewebmaster.be)",
+        "User-Agent": "Mozilla/5.0 (compatible; TheWebmaster-SeoAudit/2.0; +https://thewebmaster.pro)",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
@@ -1001,9 +921,9 @@ export async function POST(request: NextRequest) {
     });
     const responseTime = Date.now() - startTime;
 
-    if (!response) {
+    if (!response || !response.ok) {
       return NextResponse.json(
-        { error: "Impossible de joindre le site. Verifiez l'URL." },
+        { error: `Impossible de charger le site (HTTP ${response?.status || "timeout"})` },
         { status: 502 }
       );
     }
@@ -1012,74 +932,328 @@ export async function POST(request: NextRequest) {
     const headers = response.headers;
     const pageSize = new Blob([html]).size;
 
-    // Extract headings
+    // Shared parsed structures
+    const metas = parseMetaTags(html);
+    const linkTags = parseLinkTags(html);
     const headings = extractHeadings(html);
+    const anchors = parseAnchorTags(html);
+    const { internal, external } = categorizeLinks(anchors, targetUrl);
+    const imgs = parseImgTags(html);
+    const meaningfulImgs = imgs.filter((i) => !i.decorative);
+    const textContent = extractVisibleText(html);
+    const totalWords = wordCount(textContent);
 
-    // Extract image stats
-    const imgTags = html.match(/<img[^>]*>/gi) || [];
-    const imgsWithAlt = imgTags.filter((img) => /alt=["'][^"']+["']/i.test(img)).length;
+    // Schema.org parsing (reused by site-context detection)
+    const jsonLdResult = validateJsonLd(html);
 
-    // Extract link stats
-    const hrefs = extractAllAttributes(html, "a", "href");
-    const internalLinks = hrefs.filter(
-      (h) => h.startsWith("/") || h.startsWith("#") || h.startsWith("./")
-    ).length;
-    const externalLinks = hrefs.filter((h) => /^https?:\/\//i.test(h)).length;
+    // Detect stack + site type
+    const technologies = detectTechnologies(html, headers);
+    const stackInfo = detectStack(html, headers, technologies);
+    const siteContext = detectSiteContext({
+      url: targetUrl,
+      html,
+      jsonLdTypes: jsonLdResult.types,
+      headings,
+      wordCount: totalWords,
+      internalLinkCount: internal.length,
+      cmsName: stackInfo.cms,
+    });
 
-    // Run all checks
-    const [technicalChecks, offPageChecks] = await Promise.all([
-      checkTechnical(targetUrl.toString(), html, headers, responseTime, isHttps),
-      checkOffPage(targetUrl.toString(), html),
+    // Multi-page crawl (sitemap + heuristic routes) — best-effort
+    let crawledRoutes: string[] = [];
+    try {
+      crawledRoutes = await discoverRoutes(targetUrl, 5);
+    } catch {}
+
+    // Run external / async checks in parallel. PSI + link check are optional
+    // (network-dependent) and time-capped inside their respective modules.
+    const [
+      technicalChecks,
+      sitemapChecks,
+      hreflangChecks,
+      ogImageChecks,
+      brokenLinkResult,
+      pagespeedChecks,
+    ] = await Promise.all([
+      checkTechnical(targetUrl, html, headers, responseTime),
+      checkSitemap(origin),
+      validateHreflang(targetUrl, html),
+      checkOgImage(getMetaContent(metas, "og:image"), targetUrl),
+      checkBrokenLinks(html, targetUrl, 40),
+      checkPageSpeed(targetUrl),
     ]);
-    const onPageChecks = checkOnPage(html, headings);
-    const performanceChecks = checkPerformance(html, headers, responseTime, pageSize);
 
-    const allChecks = [
+    // Sync checks
+    const onPageChecks = checkOnPage(html, metas, headings, internal.length, totalWords, siteContext.type);
+    const performanceChecks = checkPerformance(html);
+    const offPageChecks = checkOffPage(html, metas, linkTags);
+
+    // Robots.txt check (with soft 404 detection)
+    const robotsChecks = await checkRobotsTxt(origin);
+
+    const baseChecks: AuditCheck[] = [
       ...technicalChecks,
+      ...sitemapChecks,
+      ...robotsChecks,
+      ...hreflangChecks,
+      ...jsonLdResult.checks,
       ...onPageChecks,
+      ...brokenLinkResult.checks,
+      ...ogImageChecks,
+      ...pagespeedChecks,
       ...performanceChecks,
       ...offPageChecks,
     ];
 
-    const { score, grade } = calculateScore(allChecks);
+    // Enrich with compliance + stack-aware remediations
+    const enrichedChecks = enhanceWithStackRemediations(
+      enrichWithCompliance(baseChecks),
+      stackInfo
+    );
 
-    // Detect technologies
-    const technologies = detectTechnologies(html, headers);
+    const { score, grade, status, categoryScores } = calculateScore(enrichedChecks);
+    const actionPlan = buildActionPlan(enrichedChecks, 10);
 
-    const result: SeoAuditResult = {
-      url: targetUrl.toString(),
+    const hasTracking = /google-analytics|gtm\.js|plausible|umami|matomo/i.test(html);
+    const threatModel = buildSeoThreatModel(
+      stackInfo,
+      siteContext.type,
+      hasTracking,
+      enrichedChecks.map((c) => ({ id: c.id, status: c.status }))
+    );
+
+    // Regression detection vs previous audit of same site
+    let regressions: Regression[] = [];
+    try {
+      const previous = getPreviousAudit(targetUrl, "seo");
+      if (previous && previous.report && typeof previous.report === "object") {
+        const prevReport = previous.report as { checks?: AuditCheck[] };
+        const prevChecks = Array.isArray(prevReport.checks) ? prevReport.checks : [];
+        const prevMap = new Map(prevChecks.map((c) => [c.id, c]));
+        const regressionSeverity: Record<string, number> = { pass: 0, info: 0, warn: 1, fail: 2 };
+        for (const curr of enrichedChecks) {
+          const prev = prevMap.get(curr.id);
+          if (!prev) continue;
+          const prevLvl = regressionSeverity[prev.status] ?? 0;
+          const currLvl = regressionSeverity[curr.status] ?? 0;
+          if (currLvl > prevLvl) {
+            regressions.push({
+              checkId: curr.id,
+              name: curr.name,
+              previousStatus: prev.status,
+              currentStatus: curr.status,
+              previousAuditAt: previous.createdAt,
+            });
+          }
+        }
+        regressions = regressions.slice(0, 10);
+      }
+    } catch {}
+
+    const seoMeta: SeoMeta = {
+      title: extractPageTitle(html),
+      description: getMetaContent(metas, "description"),
+      canonical: getLinksByRel(linkTags, "canonical")[0]?.href || null,
+      ogImage: getMetaContent(metas, "og:image"),
+      language: extractLangAttribute(html),
+      robots: getMetaContent(metas, "robots"),
+    };
+
+    // Persist the audit report for regression tracking + sharing
+    let reportId: string | undefined;
+    try {
+      reportId = insertAuditReport({
+        siteUrl: targetUrl,
+        score,
+        grade,
+        auditType: "seo",
+        report: {
+          url: targetUrl,
+          timestamp: new Date().toISOString(),
+          score,
+          grade,
+          status,
+          checks: enrichedChecks,
+          categoryScores,
+          responseTime,
+          tlsInfo: { secure: isHttps },
+          technologies,
+          cmsInfo: null,
+          stack: stackInfo,
+          actionPlan,
+          threatModel,
+          regressions,
+          crawledRoutes,
+          seoMeta,
+          headings: headings.slice(0, 30),
+          links: { internal: internal.length, external: external.length, broken: brokenLinkResult.broken.length },
+          images: {
+            total: imgs.length,
+            withAlt: meaningfulImgs.filter((i) => i.alt && i.alt.trim().length >= 3).length,
+            withoutAlt: meaningfulImgs.filter((i) => !i.alt || i.alt.trim().length < 3).length,
+          },
+          pageSize,
+          siteContext,
+        },
+      });
+    } catch {}
+
+    const result: AuditResult = {
+      url: targetUrl,
       timestamp: new Date().toISOString(),
       score,
       grade,
-      checks: allChecks,
+      status,
+      checks: enrichedChecks,
+      categoryScores,
       responseTime,
-      pageSize,
-      meta: {
-        title: extractTag(html, "title"),
-        description: extractMeta(html, "description"),
-        canonical:
-          html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']*)["']/i)?.[1] || null,
-        ogImage: extractMeta(html, "og:image"),
-        language: html.match(/<html[^>]*lang=["']([^"']*)["']/i)?.[1] || null,
-      },
-      headings: headings.slice(0, 30),
-      links: { internal: internalLinks, external: externalLinks, broken: 0 },
-      images: { total: imgTags.length, withAlt: imgsWithAlt, withoutAlt: imgTags.length - imgsWithAlt },
+      tlsInfo: { secure: isHttps },
       technologies,
+      cmsInfo: null,
+      stack: stackInfo,
+      actionPlan,
+      threatModel,
+      regressions,
+      crawledRoutes,
+      seoMeta,
+      headings: headings.slice(0, 30),
+      links: { internal: internal.length, external: external.length, broken: 0 },
+      images: {
+        total: imgs.length,
+        withAlt: meaningfulImgs.filter((i) => i.alt && i.alt.trim().length >= 3).length,
+        withoutAlt: meaningfulImgs.filter((i) => !i.alt || i.alt.trim().length < 3).length,
+      },
+      pageSize,
+      siteContext,
+      reportId,
+      publicUrl: reportId ? `/seo-audit/r/${reportId}` : undefined,
     };
 
-    // Track audit request
+    // Track
     try {
       const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
-      insertAuditRequest({ siteUrl: result.url, auditType: "seo", score: result.score, grade: result.grade, ipAddress: ip });
-    } catch { /* non-blocking */ }
+      insertAuditRequest({
+        siteUrl: result.url,
+        auditType: "seo",
+        score: result.score,
+        grade: result.grade,
+        ipAddress: ip,
+      });
+    } catch {}
 
     return NextResponse.json(result);
   } catch (error) {
-    console.error("SEO Audit error:", error);
+    console.error("[SEO Audit] Error:", error);
     return NextResponse.json(
-      { error: "Erreur interne lors de l'analyse" },
+      { error: "Erreur interne lors de l'analyse SEO" },
       { status: 500 }
     );
   }
+}
+
+// =============================================================================
+// ROBOTS.TXT CHECK — validates content-type + Disallow semantics
+// =============================================================================
+
+// Parses robots.txt into groups-by-user-agent and returns true if the `*`
+// (or missing) group disallows the root path. More lenient than a single
+// regex — handles CRLF, trailing whitespace, comments, and group ordering.
+function detectFullBlockForWildcard(body: string): boolean {
+  const lines = body.split(/\r?\n/).map((l) => l.replace(/#.*$/, "").trim());
+  let inWildcard = false;
+  let sawWildcard = false;
+  for (const line of lines) {
+    if (!line) continue;
+    const uaMatch = line.match(/^User-agent:\s*(.+)$/i);
+    if (uaMatch) {
+      const ua = uaMatch[1].trim();
+      inWildcard = ua === "*";
+      if (inWildcard) sawWildcard = true;
+      continue;
+    }
+    if (inWildcard) {
+      const disallow = line.match(/^Disallow:\s*(.*)$/i);
+      if (disallow) {
+        const path = disallow[1].trim();
+        if (path === "/" || path === "/*") return true;
+      }
+    }
+  }
+  return sawWildcard ? false : false;
+}
+
+async function checkRobotsTxt(origin: string): Promise<AuditCheck[]> {
+  const url = `${origin}/robots.txt`;
+  const res = await safeFetch(url, { timeout: 5000 });
+  if (!res || !res.ok) {
+    return [
+      {
+        id: "tech-robots",
+        category: "technical",
+        name: "robots.txt",
+        status: "warn",
+        severity: "low",
+        description: "Aucun fichier robots.txt accessible.",
+        recommendation: "Ajoutez /robots.txt pour guider les crawlers. Sur Next.js : `app/robots.ts`.",
+      },
+    ];
+  }
+
+  const contentType = res.headers.get("content-type") || "";
+  const body = await res.text();
+
+  // Soft 404 detection : HTML as robots.txt = bogus
+  const looksLikeHtml =
+    /text\/html/i.test(contentType) || /^<!doctype html|<html/i.test(body.trim());
+  if (looksLikeHtml) {
+    return [
+      {
+        id: "tech-robots-soft-404",
+        category: "technical",
+        name: "robots.txt soft 404",
+        status: "fail",
+        severity: "medium",
+        description: `/robots.txt renvoie du HTML au lieu du contenu plain-text — Google considère cela comme un 404.`,
+        value: url,
+        recommendation: "Retournez un vrai text/plain ou un 404. Sur Next.js : `app/robots.ts` avec MetadataRoute.Robots.",
+      },
+    ];
+  }
+
+  // Disallow: / blocks entire site. We parse by User-agent block to avoid
+  // false positives (a Disallow: / under a specific bot doesn't block Googlebot).
+  const fullBlock = detectFullBlockForWildcard(body);
+  if (fullBlock) {
+    return [
+      {
+        id: "tech-robots-block-all",
+        category: "technical",
+        name: "robots.txt bloque tout le site",
+        status: "fail",
+        severity: "critical",
+        description: "`Disallow: /` dans robots.txt empêche TOUT crawl. Le site ne sera pas indexé.",
+        value: url,
+        recommendation: "Supprimez cette règle sauf si le site est en cours de développement.",
+      },
+    ];
+  }
+
+  // Sitemap declared in robots.txt
+  const hasSitemapDecl = /^\s*Sitemap:\s*https?:\/\//im.test(body);
+
+  return [
+    {
+      id: "tech-robots",
+      category: "technical",
+      name: "robots.txt",
+      status: "pass",
+      description: hasSitemapDecl
+        ? "robots.txt valide avec déclaration Sitemap."
+        : "robots.txt accessible et valide.",
+      value: url,
+      recommendation: !hasSitemapDecl
+        ? "Ajoutez `Sitemap: https://votredomaine.com/sitemap.xml` à la fin du robots.txt pour aider le crawl."
+        : undefined,
+    },
+  ];
 }

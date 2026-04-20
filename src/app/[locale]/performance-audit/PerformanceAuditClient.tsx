@@ -45,16 +45,15 @@ import { jsPDF } from "jspdf";
 import { translations, type PerfTranslations, getDateLocale } from "./translations";
 import UnlockGate from "@/components/UnlockGate";
 
-interface PerfCheck {
-  id: string;
-  category: string;
-  name: string;
-  status: "pass" | "warn" | "fail" | "info";
-  severity?: "critical" | "high" | "medium" | "low" | "info";
-  description: string;
-  value?: string;
-  recommendation?: string;
-}
+import type {
+  AuditCheck as SharedAuditCheck,
+  AuditResult as SharedAuditResult,
+  ActionItem,
+  ThreatVector,
+  StackInfo,
+} from "@/types/audit";
+
+type PerfCheck = SharedAuditCheck;
 
 interface ResourceStats {
   totalScripts: number;
@@ -70,26 +69,11 @@ interface ResourceStats {
   preloadedFonts: number;
 }
 
-interface CMSInfo {
-  name: string | null;
-  version: string | null;
-  isOutdated: boolean | null;
-  theme: { name: string; version?: string } | null;
-  plugins: { name: string; version?: string }[];
-}
-
-interface PerfAuditResult {
-  url: string;
-  timestamp: string;
-  score: number;
-  grade: string;
-  checks: PerfCheck[];
-  responseTime: number;
-  pageSize: number;
+// The rewritten API always returns legacy-shape fields for backward compat,
+// in addition to the new action plan / threat model / regressions / stack.
+type PerfAuditResult = SharedAuditResult & {
   htmlSize: number;
   resources: ResourceStats;
-  technologies: string[];
-  cmsInfo: CMSInfo | null;
   serverInfo: {
     server: string | null;
     poweredBy: string | null;
@@ -102,7 +86,7 @@ interface PerfAuditResult {
     slow3g: string;
     cable: string;
   };
-}
+};
 
 function getCategoryLabels(t: PerfTranslations) {
   return {
@@ -383,6 +367,220 @@ function ServerInfo({ info, t }: { info: PerfAuditResult["serverInfo"]; t: PerfT
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// NEW SECTIONS (post-rewrite) — regressions / CWV / action plan / threat / share
+// =============================================================================
+
+function PerfRegressions({ regressions }: { regressions: NonNullable<PerfAuditResult["regressions"]> }) {
+  return (
+    <div className="p-6 rounded-2xl border border-orange-500/40 bg-orange-500/5">
+      <div className="flex items-center gap-2 mb-3">
+        <AlertTriangle className="w-5 h-5 text-orange-500" />
+        <h3 className="text-lg font-semibold">
+          {regressions.length} régression{regressions.length > 1 ? "s" : ""} depuis le dernier audit
+        </h3>
+      </div>
+      <ul className="space-y-1.5 text-sm">
+        {regressions.map((reg) => (
+          <li key={reg.checkId} className="flex items-center gap-2">
+            <span className="font-mono text-xs text-muted-foreground px-1.5 py-0.5 rounded bg-muted/50">{reg.previousStatus}</span>
+            <span className="text-orange-500">→</span>
+            <span className="font-mono text-xs text-orange-600 dark:text-orange-400 font-semibold px-1.5 py-0.5 rounded bg-orange-500/10">{reg.currentStatus}</span>
+            <span>{reg.name}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PerfCwvBento({ checks }: { checks: PerfCheck[] }) {
+  const lcp = checks.find((c) => c.id === "cwv-lcp");
+  const cls = checks.find((c) => c.id === "cwv-cls");
+  const inp = checks.find((c) => c.id === "cwv-inp");
+  if (!lcp && !cls && !inp) return null;
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      {lcp && <CwvCard title="LCP" sub="Largest Contentful Paint" check={lcp} target="< 2.5 s" />}
+      {cls && <CwvCard title="CLS" sub="Cumulative Layout Shift" check={cls} target="< 0.1" />}
+      {inp && <CwvCard title="INP" sub="Interaction to Next Paint" check={inp} target="< 200 ms" />}
+    </div>
+  );
+}
+
+function CwvCard({ title, sub, check, target }: { title: string; sub: string; check: PerfCheck; target: string }) {
+  const cardColors = {
+    pass: "border-emerald-500/40 bg-emerald-500/5",
+    warn: "border-yellow-500/40 bg-yellow-500/5",
+    fail: "border-red-500/40 bg-red-500/5",
+    info: "border-border/50 bg-muted/20",
+  };
+  const iconMap = {
+    pass: <CheckCircle2 className="w-4 h-4 text-emerald-500" />,
+    warn: <AlertTriangle className="w-4 h-4 text-yellow-500" />,
+    fail: <XCircle className="w-4 h-4 text-red-500" />,
+    info: <Info className="w-4 h-4 text-blue-500" />,
+  };
+  return (
+    <div className={cn("rounded-xl border p-4", cardColors[check.status])}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-lg font-bold">{title}</span>
+        {iconMap[check.status]}
+      </div>
+      <div className="text-xs text-muted-foreground mb-2">{sub}</div>
+      <div className="text-2xl font-mono font-semibold">{check.value || "—"}</div>
+      <div className="mt-1 text-[11px] text-muted-foreground">Seuil : {target}</div>
+    </div>
+  );
+}
+
+function PerfActionPlan({ actionPlan, t }: { actionPlan: ActionItem[]; t: PerfTranslations }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const sevCfg = getSeverityConfig(t);
+  const totalMin = actionPlan.reduce((s, i) => s + i.effortMinutes, 0);
+  const totalPts = actionPlan.reduce((s, i) => s + i.pointsGained, 0);
+  const hours = Math.ceil(totalMin / 60);
+  return (
+    <div className="p-6 rounded-2xl border border-primary/30 bg-primary/5">
+      <div className="flex items-center gap-2 mb-2">
+        <ArrowUpRight className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">Plan d&apos;action perf prioritaire</h3>
+      </div>
+      <p className="text-sm text-muted-foreground mb-4">
+        {actionPlan.length} action{actionPlan.length > 1 ? "s" : ""} à ~{hours} h au total · gain estimé +{totalPts.toFixed(0)} points
+      </p>
+      <ol className="space-y-2">
+        {actionPlan.map((item, i) => {
+          const sev = sevCfg[item.severity];
+          const isOpen = !!expanded[item.checkId];
+          return (
+            <li key={item.checkId} className="rounded-lg border border-border/50 bg-background/50">
+              <button
+                type="button"
+                onClick={() => setExpanded((e) => ({ ...e, [item.checkId]: !e[item.checkId] }))}
+                className="w-full flex items-center gap-3 p-3 text-left hover:bg-muted/30 transition-colors rounded-lg"
+              >
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+                  {i + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{item.title}</p>
+                  <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                    {sev && <span className={cn("px-1.5 py-0.5 rounded border", sev.color)}>{sev.label}</span>}
+                    <span className="inline-flex items-center gap-1 text-muted-foreground">~{item.effortMinutes} min</span>
+                    <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                      +{item.pointsGained.toFixed(1)} pts
+                    </span>
+                  </div>
+                </div>
+                {isOpen ? <ChevronUp className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
+              </button>
+              {isOpen && (
+                <div className="border-t border-border/50 bg-muted/20 p-3 text-sm space-y-3">
+                  {item.recommendation && <p className="whitespace-pre-line text-muted-foreground">{item.recommendation}</p>}
+                  {item.stackRemediation && (
+                    <div>
+                      <p className="text-xs font-medium mb-1.5">Code {item.stackRemediation.stack}</p>
+                      <pre className="overflow-x-auto rounded bg-background p-3 text-xs font-mono">
+                        <code>{item.stackRemediation.code}</code>
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function PerfThreatSection({ threatModel, stack }: { threatModel: ThreatVector[]; stack?: StackInfo }) {
+  const sevColors: Record<string, string> = {
+    critical: "border-red-500/50 bg-red-500/5",
+    high: "border-orange-500/50 bg-orange-500/5",
+    medium: "border-yellow-500/50 bg-yellow-500/5",
+    low: "border-border/50 bg-muted/20",
+    info: "border-border/50 bg-muted/20",
+  };
+  return (
+    <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
+      <div className="flex items-center gap-2 mb-4">
+        <Zap className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">
+          Risques perf spécifiques
+          {stack?.primaryFramework && ` (${stack.primaryFramework})`}
+        </h3>
+      </div>
+      <div className="space-y-3">
+        {threatModel.map((threat) => (
+          <details key={threat.id} className={cn("rounded-lg border p-4", sevColors[threat.severity])}>
+            <summary className="cursor-pointer font-medium flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-background/60 border border-border/40">
+                {threat.severity}
+              </span>
+              <span>{threat.title}</span>
+            </summary>
+            <p className="mt-2 text-sm text-muted-foreground">{threat.description}</p>
+            <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
+              {threat.mitigations.map((m, i) => <li key={i}>{m}</li>)}
+            </ul>
+          </details>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PerfShareableReport({ reportId, locale, score, grade }: { reportId: string; locale: string; score: number; grade: string }) {
+  const [copied, setCopied] = useState<"url" | "md" | "html" | null>(null);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const pageUrl = `${origin}/${locale}/performance-audit/r/${reportId}`;
+  const badgeUrl = `${origin}/api/performance-audit/badge/${reportId}.svg`;
+  const markdown = `[![performance](${badgeUrl})](${pageUrl})`;
+  const html = `<a href="${pageUrl}"><img src="${badgeUrl}" alt="performance: ${grade} (${score}/100)"/></a>`;
+  function copy(text: string, kind: "url" | "md" | "html") {
+    navigator.clipboard.writeText(text);
+    setCopied(kind);
+    setTimeout(() => setCopied(null), 2000);
+  }
+  return (
+    <div className="p-6 rounded-2xl border border-border/50 bg-card/50">
+      <div className="flex items-center gap-2 mb-3">
+        <FileText className="w-5 h-5 text-primary" />
+        <h3 className="text-lg font-semibold">Partager ce rapport</h3>
+      </div>
+      <div className="flex items-center gap-3 mb-4">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={badgeUrl} alt="performance badge" className="h-5" />
+      </div>
+      <div className="space-y-2">
+        <PerfSnippetRow label="URL" value={pageUrl} copied={copied === "url"} onCopy={() => copy(pageUrl, "url")} />
+        <PerfSnippetRow label="Markdown" value={markdown} copied={copied === "md"} onCopy={() => copy(markdown, "md")} />
+        <PerfSnippetRow label="HTML" value={html} copied={copied === "html"} onCopy={() => copy(html, "html")} />
+      </div>
+    </div>
+  );
+}
+
+function PerfSnippetRow({ label, value, copied, onCopy }: { label: string; value: string; copied: boolean; onCopy: () => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-20 text-xs font-medium text-muted-foreground shrink-0">{label}</span>
+      <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-xs font-mono">{value}</code>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="inline-flex items-center gap-1 rounded border border-border/50 px-2 py-1 text-xs hover:bg-muted transition-colors shrink-0"
+        aria-label={`Copier ${label}`}
+      >
+        {copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+      </button>
     </div>
   );
 }
@@ -1090,6 +1288,29 @@ export default function PerformanceAuditClient({ locale = "fr" }: { locale?: str
               />
             ) : (
             <>
+            {/* Regressions */}
+            {result.regressions && result.regressions.length > 0 && (
+              <PerfRegressions regressions={result.regressions} />
+            )}
+
+            {/* Core Web Vitals bento — highlight real values from PSI */}
+            <PerfCwvBento checks={result.checks} />
+
+            {/* Action plan */}
+            {result.actionPlan && result.actionPlan.length > 0 && (
+              <PerfActionPlan actionPlan={result.actionPlan} t={t} />
+            )}
+
+            {/* Threat model */}
+            {result.threatModel && result.threatModel.length > 0 && (
+              <PerfThreatSection threatModel={result.threatModel} stack={result.stack} />
+            )}
+
+            {/* Shareable report + badge */}
+            {result.reportId && (
+              <PerfShareableReport reportId={result.reportId} locale={locale} score={result.score} grade={result.grade} />
+            )}
+
             <QuickStats result={result} t={t} />
 
             <EstimatedLoadTimes times={result.estimatedLoadTime} t={t} />
