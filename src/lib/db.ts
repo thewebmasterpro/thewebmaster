@@ -2,7 +2,7 @@ import path from "path";
 import fs from "fs";
 
 function getDataDir() {
-  return path.join(process.cwd(), "data");
+  return process.env.DATA_DIR || path.join(process.cwd(), "data");
 }
 
 function getDbPath() {
