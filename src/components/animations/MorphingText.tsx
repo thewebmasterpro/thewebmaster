@@ -68,13 +68,16 @@ export function Typewriter({
   const [isTyping, setIsTyping] = useState(false);
 
   useEffect(() => {
-    setDisplayText("");
-    setIsTyping(true);
+    let typeTimer: ReturnType<typeof setInterval> | undefined;
+    const resetTimer = setTimeout(() => {
+      setDisplayText("");
+      setIsTyping(true);
+    }, 0);
 
     const startTimer = setTimeout(() => {
       let currentIndex = 0;
 
-      const typeTimer = setInterval(() => {
+      typeTimer = setInterval(() => {
         if (currentIndex < text.length) {
           setDisplayText(text.slice(0, currentIndex + 1));
           currentIndex++;
@@ -85,10 +88,13 @@ export function Typewriter({
         }
       }, speed);
 
-      return () => clearInterval(typeTimer);
     }, delay);
 
-    return () => clearTimeout(startTimer);
+    return () => {
+      clearTimeout(resetTimer);
+      clearTimeout(startTimer);
+      clearInterval(typeTimer);
+    };
   }, [text, speed, delay, onComplete]);
 
   return (
