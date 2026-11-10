@@ -1,4 +1,3 @@
-import type { NextConfig } from "next";
 import createMDX from "@next/mdx";
 
 // =============================================================================
@@ -68,7 +67,7 @@ const securityHeaders = [
   },
 ];
 
-const nextConfig: NextConfig = {
+const nextConfig = {
   // Remove X-Powered-By header
   poweredByHeader: false,
 
